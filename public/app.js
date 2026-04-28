@@ -21,6 +21,7 @@ let lastFlexipage = null;
 let isStreaming   = false;
 let turns         = [];     // [{ question, time, result, tokenText }]
 let historyOpen   = false;
+let currentMode   = 'new';  // 'new' | 'assistant' | 'edit'
 
 /* ═══════════════════════════════════════════════════════════
    Boot
@@ -226,7 +227,9 @@ function wireUI() {
     reader.onload = (evt) => {
       attachedFile = { name: file.name, content: evt.target.result };
       document.getElementById('attachment-name').textContent = file.name;
-      document.getElementById('attachment-row').classList.add('visible');
+      const row = document.getElementById('attachment-row');
+      row.classList.add('visible');
+      row.classList.remove('edit-hint');
     };
     reader.onerror = () => setStatus('Failed to read file', false);
     reader.readAsText(file);
@@ -240,6 +243,8 @@ function wireUI() {
     if (isStreaming) return;
     sessionStorage.removeItem(SESSION_KEY);
     clearAttachment();
+    currentMode = 'new';
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'new'));
     document.getElementById('message-list').innerHTML =
       '<div class="welcome-message"><p>Describe the FlexiPage you want to build. Pick an example below or type your own prompt.</p></div>';
     clearResponsePanel();
@@ -254,6 +259,22 @@ function wireUI() {
   });
   promptInput.addEventListener('input', autosize);
   document.getElementById('btn-send').addEventListener('click', handleSend);
+
+  // Mode selector
+  document.getElementById('mode-group')?.addEventListener('click', (e) => {
+    const btn = e.target.closest('.mode-btn');
+    if (!btn) return;
+    currentMode = btn.dataset.mode;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    // Edit page mode — nudge user to attach a file
+    const attachRow = document.getElementById('attachment-row');
+    if (currentMode === 'edit' && !attachedFile) {
+      attachRow.classList.add('edit-hint');
+    } else {
+      attachRow.classList.remove('edit-hint');
+    }
+  });
 
   // API search panel
   document.getElementById('btn-api-search')?.addEventListener('click', toggleApiSearch);
@@ -307,10 +328,27 @@ async function handleSend() {
   document.getElementById('btn-send').disabled = true;
   isStreaming = true;
 
+  // Derive code value from mode
+  let codeValue;
+  if (currentMode === 'assistant') {
+    codeValue = 'Assistant';
+  } else if (currentMode === 'edit') {
+    if (!attachedFile) {
+      setStatus('Attach a JSON file for Edit page mode', false);
+      document.getElementById('btn-send').disabled = false;
+      isStreaming = false;
+      document.getElementById('attachment-row').classList.add('edit-hint');
+      return;
+    }
+    codeValue = attachedFile.content;
+  } else {
+    codeValue = 'Base';
+  }
+
   const body = {
     input: {
       question,
-      code: attachedFile ? attachedFile.content : 'Base',
+      code: codeValue,
     },
     config: {
       configurable: { thread_id: getThreadId(), model: 'pro' },
