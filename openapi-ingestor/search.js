@@ -17,13 +17,17 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const { Pool } = require('pg');
 
-const pool = new Pool({
-  host:     process.env.PG_HOST     || 'localhost',
-  port:     Number(process.env.PG_PORT || 5432),
-  database: process.env.PG_DATABASE || 'scm_apis',
-  user:     process.env.PG_USER     || 'postgres',
-  password: process.env.PG_PASSWORD || '',
-});
+const poolConfig = process.env.DATABASE_URL
+  ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }
+  : {
+      host:     process.env.PG_HOST     || 'localhost',
+      port:     Number(process.env.PG_PORT || 5432),
+      database: process.env.PG_DATABASE || 'scm_apis',
+      user:     process.env.PG_USER     || 'postgres',
+      password: process.env.PG_PASSWORD || '',
+    };
+
+const pool = new Pool(poolConfig);
 
 /* ═══════════════════════════════════════════════════════════
    Tool: searchApi
@@ -31,6 +35,17 @@ const pool = new Pool({
    summary, description, and tags.
 ═══════════════════════════════════════════════════════════ */
 async function searchApi(query, { limit = 20 } = {}) {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+
+  // Per-word ILIKE: "receiving transaction" matches "receivingTransactions"
+  const wordParams = [];
+  const wordClauses = words.map((w) => {
+    wordParams.push(`%${w}%`);
+    return `path ILIKE $${wordParams.length}`;
+  });
+  const allWordsInPath = wordClauses.length ? wordClauses.join(' AND ') : 'false';
+
+  const base = wordParams.length;
   const { rows } = await pool.query(`
     SELECT
       method,
@@ -38,16 +53,16 @@ async function searchApi(query, { limit = 20 } = {}) {
       operation_id,
       summary,
       tags,
-      round(ts_rank(search_vec, plainto_tsquery('english', $1))::numeric, 4) AS rank
+      round(ts_rank(search_vec, plainto_tsquery('english', $${base + 1}))::numeric, 4) AS rank
     FROM scm_endpoints
     WHERE
-      search_vec @@ plainto_tsquery('english', $1)
-      OR path         ILIKE $2
-      OR summary      ILIKE $2
-      OR operation_id ILIKE $2
+      search_vec @@ plainto_tsquery('english', $${base + 1})
+      OR (${allWordsInPath})
+      OR summary      ILIKE $${base + 2}
+      OR operation_id ILIKE $${base + 2}
     ORDER BY rank DESC, path, method
-    LIMIT $3
-  `, [query, `%${query}%`, limit]);
+    LIMIT $${base + 3}
+  `, [...wordParams, query, `%${query}%`, limit]);
   return rows;
 }
 

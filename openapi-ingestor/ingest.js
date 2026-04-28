@@ -4,7 +4,9 @@
  *
  * Drops and recreates scm_endpoints, scm_tags, scm_schemas every run.
  * Safe to re-run with a new OpenAPI file — always loads from scratch.
- */
+node --max-old-space-size=2048 openapi-ingestor/ingest.js openapi-ingestor/oracle-fusion-scm-rest-openapi.json
+*/
+
 
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 const fs   = require('fs');
@@ -18,14 +20,18 @@ if (!FILE) {
   process.exit(1);
 }
 
-/* ── DB pool ───────────────────────────────────────────────── */
-const pool = new Pool({
-  host:     process.env.PG_HOST     || 'localhost',
-  port:     Number(process.env.PG_PORT || 5432),
-  database: process.env.PG_DATABASE || 'scm_apis',
-  user:     process.env.PG_USER     || 'postgres',
-  password: process.env.PG_PASSWORD || '',
-});
+/* ── DB pool (supports Neon DATABASE_URL or individual PG_* vars) ── */
+const poolConfig = process.env.DATABASE_URL
+  ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }
+  : {
+      host:     process.env.PG_HOST     || 'localhost',
+      port:     Number(process.env.PG_PORT || 5432),
+      database: process.env.PG_DATABASE || 'scm_apis',
+      user:     process.env.PG_USER     || 'postgres',
+      password: process.env.PG_PASSWORD || '',
+    };
+
+const pool = new Pool(poolConfig);
 
 /* ── Schema ────────────────────────────────────────────────── */
 const DDL = `
@@ -226,7 +232,10 @@ async function main() {
     await client.query(`
       UPDATE scm_endpoints
       SET search_vec = to_tsvector('english',
+        -- split camelCase paths into words: receivingTransactions → receiving Transactions
+        coalesce(regexp_replace(path, '([a-z])([A-Z])', '\\1 \\2', 'g'), '') || ' ' ||
         coalesce(path,         '') || ' ' ||
+        coalesce(regexp_replace(operation_id, '[_]', ' ', 'g'), '') || ' ' ||
         coalesce(operation_id, '') || ' ' ||
         coalesce(summary,      '') || ' ' ||
         coalesce(description,  '') || ' ' ||

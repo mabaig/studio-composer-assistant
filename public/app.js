@@ -255,6 +255,18 @@ function wireUI() {
   promptInput.addEventListener('input', autosize);
   document.getElementById('btn-send').addEventListener('click', handleSend);
 
+  // API search panel
+  document.getElementById('btn-api-search')?.addEventListener('click', toggleApiSearch);
+  document.getElementById('api-search-close')?.addEventListener('click', () => {
+    document.getElementById('api-search-panel').style.display = 'none';
+    document.getElementById('btn-api-search')?.classList.remove('active');
+  });
+  const apiQ = document.getElementById('api-search-q');
+  if (apiQ) {
+    apiQ.addEventListener('input', () => debounceApiSearch(apiQ.value));
+    apiQ.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('api-search-panel').style.display = 'none'; });
+  }
+
   // Copy
   document.getElementById('btn-copy')?.addEventListener('click', copyContent);
 
@@ -657,6 +669,258 @@ function syntaxHighlightJSON(obj) {
       return match;
     }
   );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   API Search
+═══════════════════════════════════════════════════════════ */
+let _apiSearchTimer = null;
+
+function toggleApiSearch() {
+  const panel  = document.getElementById('api-search-panel');
+  const btn    = document.getElementById('btn-api-search');
+  const visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : 'block';
+  btn?.classList.toggle('active', !visible);
+  if (!visible) document.getElementById('api-search-q').focus();
+}
+
+function debounceApiSearch(q) {
+  clearTimeout(_apiSearchTimer);
+  const resultsEl = document.getElementById('api-search-results');
+  if (!q.trim()) {
+    resultsEl.innerHTML = '<p class="api-search-hint">Search across 3,613 Oracle SCM endpoints</p>';
+    return;
+  }
+  resultsEl.innerHTML = '<p class="api-search-hint">Searching…</p>';
+  _apiSearchTimer = setTimeout(() => runApiSearch(q), 300);
+}
+
+async function runApiSearch(q) {
+  const resultsEl = document.getElementById('api-search-results');
+  try {
+    const res  = await fetch(`/api/search-api?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderApiSearchResults(data);
+  } catch (err) {
+    resultsEl.innerHTML = `<p class="api-search-hint" style="color:#ff6b6b">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderApiSearchResults(results) {
+  const el = document.getElementById('api-search-results');
+  if (!results.length) {
+    el.innerHTML = '<p class="api-search-hint">No results found</p>';
+    return;
+  }
+  el.innerHTML = results.map((r, i) => `
+    <div class="api-result-item">
+      <button class="api-result-header" onclick="toggleApiResultDetail(this, ${i}, '${escapeHtml(r.path)}')">
+        <span class="api-method api-method-${r.method}">${r.method}</span>
+        <span class="api-result-path">${escapeHtml(r.path)}</span>
+        <span class="api-result-summary">${escapeHtml(r.summary || '')}</span>
+        <svg class="api-result-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="api-result-detail" id="api-detail-${i}" style="display:none"></div>
+    </div>
+  `).join('');
+}
+
+async function toggleApiResultDetail(btn, idx, path) {
+  const detailEl = document.getElementById(`api-detail-${idx}`);
+  const chevron  = btn.querySelector('.api-result-chevron');
+  const open     = detailEl.style.display !== 'none';
+
+  if (open) {
+    detailEl.style.display = 'none';
+    chevron?.classList.remove('open');
+    return;
+  }
+
+  detailEl.style.display = 'block';
+  chevron?.classList.add('open');
+
+  if (detailEl.dataset.loaded) return;
+  detailEl.innerHTML = '<p class="api-search-hint">Loading…</p>';
+
+  try {
+    const res  = await fetch(`/api/endpoint-detail?path=${encodeURIComponent(path)}`);
+    const rows = await res.json();
+    if (rows.error) throw new Error(rows.error);
+    if (!rows.length) { detailEl.innerHTML = '<p class="api-search-hint">No detail found</p>'; return; }
+
+    detailEl._apiRows = rows;
+
+    detailEl.innerHTML = rows.map((r, rowIdx) => {
+      const parts = [];
+
+      if (rows.length > 1) {
+        parts.push(`<div class="api-detail-method-header">
+          <span class="api-method api-method-${r.method}">${r.method}</span>
+          <code class="api-detail-path">${escapeHtml(r.path)}</code>
+        </div>`);
+      }
+
+      if (r.description) {
+        parts.push(`<p class="api-detail-desc">${escapeHtml(r.description.split('\n')[0])}</p>`);
+      }
+
+      // ── Parameters ──
+      const params = (Array.isArray(r.parameters) ? r.parameters : []).filter(p => p.name);
+      if (params.length) {
+        parts.push(`<p class="api-detail-label">Parameters <span class="api-detail-count">${params.length}</span></p>`);
+        parts.push('<div class="api-param-list">');
+        for (const p of params) {
+          const type = p.schema?.type || (p.schema?.$ref ? p.schema.$ref.replace(/.*\//, '') : '');
+          const firstSentence = p.description ? p.description.split(/\.\s/)[0] + '.' : '';
+          parts.push(`<div class="api-param-item">
+            <div class="api-param-meta">
+              <code class="api-param-name">${escapeHtml(p.name)}</code>
+              <span class="api-param-in api-param-in-${p.in}">${p.in}</span>
+              ${type  ? `<span class="api-param-type">${escapeHtml(type)}</span>` : ''}
+              ${p.required ? '<span class="api-param-required">required</span>' : ''}
+            </div>
+            ${firstSentence ? `<p class="api-param-desc">${escapeHtml(firstSentence)}</p>` : ''}
+          </div>`);
+        }
+        parts.push('</div>');
+      }
+
+      // ── Request Body ──
+      if (r.request_body) {
+        parts.push(`<p class="api-detail-label">Request Body</p>`);
+        parts.push(renderSchemaBlock(r.request_body));
+      }
+
+      // ── Responses ──
+      const respEntries = r.responses ? Object.entries(r.responses) : [];
+      if (respEntries.length) {
+        parts.push(`<p class="api-detail-label">Responses</p>`);
+        parts.push('<div class="api-responses">');
+        for (const [code, resp] of respEntries) {
+          const schema   = pickSchema(resp?.content);
+          const ref      = schema?.$ref?.replace(/.*\//, '');
+          const firstKey = code[0]; // '2', '4', '5'
+          parts.push(`<div class="api-response-item">
+            <span class="api-response-code api-rc-${firstKey}">${code}</span>
+            <span class="api-response-desc">${escapeHtml(resp.description || '')}</span>
+            ${ref ? `<code class="api-schema-ref-inline">→ ${escapeHtml(ref)}</code>` : ''}
+          </div>`);
+          if (schema?.properties) {
+            parts.push(renderSchemaFields(schema));
+          }
+        }
+        parts.push('</div>');
+      }
+
+      parts.push(`<button class="api-use-btn" onclick="injectApiContext(${idx},${rowIdx})">+ Add to prompt</button>`);
+
+      return `<div class="api-detail-block">${parts.join('')}</div>`;
+    }).join('<div class="api-detail-sep"></div>');
+
+    detailEl.dataset.loaded = '1';
+  } catch (err) {
+    detailEl.innerHTML = `<p class="api-search-hint" style="color:#ff6b6b">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function pickSchema(content) {
+  if (!content) return null;
+  return content['application/json']?.schema
+    || content['application/vnd.oracle.adf.resourceitem+json']?.schema
+    || content['application/vnd.oracle.adf.resourcecollection+json']?.schema
+    || Object.values(content)[0]?.schema
+    || null;
+}
+
+function renderSchemaBlock(body) {
+  // Top-level $ref on the body object itself (e.g. Oracle's requestBodies components)
+  if (body?.$ref) {
+    const name = body.$ref.replace(/.*\//, '');
+    return `<div class="api-schema-ref-block">Schema: <code>${escapeHtml(name)}</code></div>`;
+  }
+  const schema = pickSchema(body?.content);
+  if (!schema) return '<p class="api-param-desc" style="margin:4px 0 8px">No schema defined.</p>';
+  if (schema.$ref) {
+    const name = schema.$ref.replace(/.*\//, '');
+    return `<div class="api-schema-ref-block">Schema: <code>${escapeHtml(name)}</code></div>`;
+  }
+  return renderSchemaFields(schema);
+}
+
+function renderSchemaFields(schema) {
+  const props    = schema.properties || {};
+  const required = schema.required   || [];
+  const entries  = Object.entries(props);
+  if (!entries.length) return '<p class="api-param-desc" style="margin:4px 0 8px">No properties.</p>';
+
+  const rows = entries.map(([name, prop]) => {
+    const isReq = required.includes(name);
+    const type  = prop.type
+      || (prop.$ref     ? prop.$ref.replace(/.*\//, '')    : '')
+      || (prop.allOf    ? 'object'                         : '')
+      || (prop.items    ? `array[${prop.items?.type || ''}]` : '')
+      || 'any';
+    const example = prop.example !== undefined ? String(prop.example) : null;
+    const desc    = prop.description ? prop.description.split(/\.\s/)[0] + '.' : '';
+    return `<div class="api-schema-field">
+      <div class="api-param-meta">
+        <code class="api-param-name">${escapeHtml(name)}</code>
+        <span class="api-param-type">${escapeHtml(type)}</span>
+        ${isReq ? '<span class="api-param-required">required</span>' : ''}
+      </div>
+      ${desc    ? `<p class="api-param-desc">${escapeHtml(desc)}</p>` : ''}
+      ${example ? `<p class="api-param-desc api-param-example">e.g. <code>${escapeHtml(example)}</code></p>` : ''}
+    </div>`;
+  });
+  return `<div class="api-schema-fields">${rows.join('')}</div>`;
+}
+
+function injectApiContext(idx, rowIdx) {
+  const detailEl = document.getElementById(`api-detail-${idx}`);
+  const r        = detailEl?._apiRows?.[rowIdx];
+  if (!r) return;
+
+  const lines = [`${r.method} ${r.path}`];
+  if (r.summary) lines.push(r.summary);
+  lines.push('');
+
+  const params = (Array.isArray(r.parameters) ? r.parameters : []).filter(p => p.name);
+  if (params.length) {
+    lines.push('Parameters:');
+    for (const p of params) {
+      const type = p.schema?.type || '';
+      lines.push(`  ${p.name} (${p.in}${p.required ? ', required' : ''}${type ? ', ' + type : ''})`);
+    }
+    lines.push('');
+  }
+
+  if (r.request_body) {
+    const schema = pickSchema(r.request_body?.content);
+    if (schema?.properties) {
+      const req = schema.required || [];
+      lines.push('Request Body:');
+      for (const [name, prop] of Object.entries(schema.properties)) {
+        const type = prop.type || (prop.$ref ? prop.$ref.replace(/.*\//, '') : 'object');
+        lines.push(`  ${name}${req.includes(name) ? ' *' : ''}: ${type}`);
+      }
+      lines.push('');
+    } else if (schema?.$ref) {
+      lines.push(`Request Body: ${schema.$ref.replace(/.*\//, '')}`);
+      lines.push('');
+    }
+  }
+
+  const block = `[API: ${r.method} ${r.path}]\n${lines.join('\n').trim()}\n\n`;
+  const ta    = document.getElementById('prompt-input');
+  ta.value    = block + ta.value;
+  ta.focus();
+  ta.setSelectionRange(block.length, block.length);
+  autosize();
+  document.getElementById('api-search-panel').style.display = 'none';
+  ta.closest('.input-row')?.classList.add('api-injected');
+  setTimeout(() => ta.closest('.input-row')?.classList.remove('api-injected'), 800);
 }
 
 async function copyContent() {
