@@ -43,6 +43,12 @@ function initTheme() {
 function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
   localStorage.setItem(THEME_KEY, t);
+  const hljsTheme = document.getElementById('hljs-theme');
+  if (hljsTheme) {
+    hljsTheme.href = t === 'dark'
+      ? 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css'
+      : 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css';
+  }
   const btn = document.getElementById('btn-theme');
   if (!btn) return;
   const isDark = t === 'dark';
@@ -249,6 +255,9 @@ function wireUI() {
   promptInput.addEventListener('input', autosize);
   document.getElementById('btn-send').addEventListener('click', handleSend);
 
+  // Copy
+  document.getElementById('btn-copy')?.addEventListener('click', copyContent);
+
   // Download
   document.getElementById('btn-download').addEventListener('click', () => {
     if (!lastFlexipage) return;
@@ -432,6 +441,9 @@ function renderFinalResult(parsed) {
     wrapper.appendChild(pre);
     responseContent.appendChild(wrapper);
 
+    const cb = document.getElementById('btn-copy');
+    if (cb) cb.style.display = 'flex';
+
     // Auto-run review on the generated flexipage
     runReview(fp);
 
@@ -446,6 +458,8 @@ function renderFinalResult(parsed) {
     pre.appendChild(code);
     wrapper.appendChild(pre);
     responseContent.appendChild(wrapper);
+    const cb2 = document.getElementById('btn-copy');
+    if (cb2) cb2.style.display = 'flex';
   }
 }
 
@@ -564,6 +578,11 @@ function renderMarkdown(text) {
   div.className = 'markdown-body';
   div.innerHTML = typeof marked !== 'undefined' ? marked.parse(text) : escapeHtml(text);
   responseContent.appendChild(div);
+  if (typeof hljs !== 'undefined') {
+    div.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+  }
+  const cb = document.getElementById('btn-copy');
+  if (cb) cb.style.display = 'flex';
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -580,6 +599,8 @@ function clearResponsePanel() {
       <p>Your generated FlexiPage will appear here.</p>
     </div>`;
   document.getElementById('btn-download').classList.remove('visible');
+  const copyBtn = document.getElementById('btn-copy');
+  if (copyBtn) copyBtn.style.display = 'none';
   const ub = document.getElementById('usage-badge');
   if (ub) ub.textContent = '';
   const vb = document.getElementById('validation-badge');
@@ -636,6 +657,33 @@ function syntaxHighlightJSON(obj) {
       return match;
     }
   );
+}
+
+async function copyContent() {
+  let text = '';
+  if (lastFlexipage) {
+    text = JSON.stringify(lastFlexipage, null, 2);
+  } else {
+    const markdownBody = document.querySelector('.markdown-body');
+    const streamRaw    = document.querySelector('.stream-raw');
+    const jsonCode     = document.querySelector('.json-code');
+    if (markdownBody) text = markdownBody.innerText;
+    else if (jsonCode) text = jsonCode.textContent;
+    else if (streamRaw) text = streamRaw.textContent;
+  }
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    const btn = document.getElementById('btn-copy');
+    if (!btn) return;
+    const prev = btn.innerHTML;
+    btn.innerHTML = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`;
+    btn.style.color = '#34c759';
+    btn.title = 'Copied!';
+    setTimeout(() => { btn.innerHTML = prev; btn.style.color = ''; btn.title = 'Copy to clipboard'; }, 1600);
+  } catch {
+    /* clipboard blocked */
+  }
 }
 
 function escapeHtml(s) {

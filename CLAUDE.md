@@ -2,16 +2,17 @@
 
 ## Purpose
 
-A chat interface that invokes the Composer Skills streaming API to generate **FlexiPage JSON** from natural language prompts. Users type a prompt (or pick an example), optionally attach a JSON file as code context, and see the streaming response rendered and formatted on the right. When the response contains `output.flexipage`, a download button appears.
+Chat interface that generates Salesforce FlexiPage JSON from natural language prompts via the Intellinum Composer Skills streaming API. Users type a prompt (or pick an example), optionally attach a JSON file as code context, and see the streaming response rendered on the right. A built-in code reviewer runs automatically and shows a pass/fail checklist.
 
 ---
 
 ## Stack
 
-- **Backend**: Node.js ≥18 · Express · `node-fetch` (streaming proxy)
+- **Backend**: Node.js ≥18 · Express · native `fetch` (streaming proxy)
 - **Frontend**: Vanilla JS · `marked.js` (CDN) for markdown · no build step
 - **API**: `https://copilot-chat.intellinum.com/composer_skills/stream`
 - **Brand**: `#F47920` orange · `#222E5F` navy · `#009FDE` cyan
+- **Theme**: Dark (VS Code style — `#0d0d0d` bg) + Light toggle; persisted in `localStorage`
 
 ---
 
@@ -19,11 +20,13 @@ A chat interface that invokes the Composer Skills streaming API to generate **Fl
 
 ```
 studio-composer-assistant/
-├── server.js        # Express server, proxies streaming API calls
+├── server.js        # Express server — streaming proxy + /api/review endpoint
+├── reviewer.js      # FlexiPage code reviewer (9 checks, ported from Python)
 └── public/
-    ├── index.html   # 30/70 split layout (chat | response viewer)
-    ├── styles.css   # Brand colour system, dark navy theme
-    └── app.js       # Streaming client, JSON/markdown renderer, download
+    ├── index.html   # Login overlay + 42/58 split layout (chat | response viewer)
+    ├── styles.css   # Dark/light CSS custom-property theme system
+    ├── app.js       # Streaming client, JSON/markdown renderer, review UI
+    └── favicon.svg  # Orange hexagon logo
 ```
 
 ---
@@ -36,25 +39,20 @@ studio-composer-assistant/
 ```json
 {
   "input": {
-    "question": "<user prompt>",
-    "code": "<attached JSON content, or 'Base' if no file>"
-  },
-  "config": {
-    "configurable": {
-      "thread_id": "<session UUID>",
-      "model": "pro"
-    }
-  },
-  "kwargs": {}
+    "messages": [{ "role": "user", "content": "<user prompt>" }],
+    "thread_id": "<session UUID>",
+    "model": "pro",
+    "code": "<attached JSON content, or \"Base\" if no file>"
+  }
 }
 ```
 
 | Field | Rule |
 |-------|------|
-| `input.question` | User's natural language prompt |
+| `input.messages` | Array with single user message |
 | `input.code` | Content of attached JSON file; defaults to `"Base"` when no file |
-| `config.configurable.thread_id` | UUID generated once per page load — never changes mid-session |
-| `config.configurable.model` | Always `"pro"` |
+| `input.thread_id` | UUID generated once per page load — never changes mid-session |
+| `input.model` | Always `"pro"` |
 
 **Response shape** (accumulated from stream):
 ```json
@@ -76,17 +74,18 @@ studio-composer-assistant/
 ## Streaming Mechanics
 
 **Backend** (`POST /api/stream`):
-1. Receive request from browser, forward body to composer API
-2. Pipe the response stream back to the browser as SSE (`data: <chunk>\n\n`)
-3. On stream end emit `data: [DONE]\n\n`
+- Forwards body to Composer API with `Authorization: Bearer <token>` header
+- Pipes raw SSE bytes back to browser via `Readable.fromWeb(upstream.body).pipe(res)`
 
-**Frontend**:
-1. `fetch('/api/stream', { method: 'POST', body: ... })` with `ReadableStream` reader
-2. Accumulate raw chunks into a string buffer; display in `<pre>` with auto-scroll while streaming
-3. On `[DONE]`: attempt `JSON.parse` of full buffer
-   - If valid JSON with `output.flexipage` → render as syntax-highlighted JSON
-   - Otherwise → render buffer as markdown via `marked.js`
-4. Show **Download flexipage.json** button only when `output.flexipage` exists
+**Frontend** (line-by-line SSE parsing):
+- `{"token":"..."}` events → accumulate `.token` value, show in `<pre>` with auto-scroll
+- `{"output":{...}}` event → final result; render JSON viewer + auto-run reviewer
+- Fallback: if stream ends with no `output` event → render accumulated text as markdown
+
+**Token extraction** (key pattern in `app.js`):
+```javascript
+if (parsed.token !== undefined) { tokenAccum += parsed.token; pre.textContent = tokenAccum; }
+```
 
 ---
 
