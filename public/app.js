@@ -394,7 +394,13 @@ async function handleSend() {
 
     if (lastParsed) {
       renderFinalResult(lastParsed);
-      addMessage('assistant', lastParsed.output?.flexipage ? '✓ FlexiPage generated' : '✓ Response received');
+      const mode = lastParsed.output?.mode;
+      const label = lastParsed.output?.flexipage
+        ? '✓ FlexiPage generated'
+        : mode === 'assistant'
+          ? '✓ Answer received'
+          : '✓ Response received';
+      addMessage('assistant', label);
       pushTurn(displayQuestion, lastParsed, null);
     } else {
       renderMarkdown(tokenAccum || '*(No output)*');
@@ -421,26 +427,22 @@ function renderFinalResult(parsed) {
   const responseContent = document.getElementById('response-content');
   responseContent.innerHTML = '';
 
-  const fp = parsed?.output?.flexipage;
+  // Always update usage badge regardless of output type
+  updateUsageBadge(parsed.metadata?.usage, parsed.output?.mode);
+
+  const fp     = parsed?.output?.flexipage;
+  const answer = parsed?.output?.answer;
 
   if (fp) {
+    /* ── FlexiPage JSON output ── */
     lastFlexipage = fp;
     document.getElementById('btn-download').classList.add('visible');
 
-    // Validation badge
     const v = parsed.output?.validation;
     if (v !== undefined) {
       const badge = document.getElementById('validation-badge');
       badge.textContent = v.is_valid ? '✓ Valid' : '✗ Invalid';
       badge.className   = 'validation-badge ' + (v.is_valid ? 'valid' : 'invalid');
-    }
-
-    // Usage
-    const usage = parsed.metadata?.usage;
-    if (usage) {
-      const cost = usage.cost_usd?.total;
-      document.getElementById('usage-badge').textContent =
-        `${(usage.input_tokens + usage.output_tokens).toLocaleString()} tokens · $${cost ? cost.toFixed(4) : '–'}`;
     }
 
     const wrapper = document.createElement('div');
@@ -456,11 +458,14 @@ function renderFinalResult(parsed) {
     const cb = document.getElementById('btn-copy');
     if (cb) cb.style.display = 'flex';
 
-    // Auto-run review on the generated flexipage
     runReview(fp);
 
+  } else if (answer) {
+    /* ── Assistant markdown answer ── */
+    renderMarkdown(answer);
+
   } else {
-    // Render full response object
+    /* ── Fallback: render raw response as JSON ── */
     const wrapper = document.createElement('div');
     wrapper.className = 'json-viewer';
     const pre  = document.createElement('pre');
@@ -473,6 +478,23 @@ function renderFinalResult(parsed) {
     const cb2 = document.getElementById('btn-copy');
     if (cb2) cb2.style.display = 'flex';
   }
+}
+
+function updateUsageBadge(usage, mode) {
+  if (!usage) return;
+  const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+  const cacheRead   = usage.cache_read_tokens     || 0;
+  const cacheWrite  = usage.cache_creation_tokens || 0;
+  const cost        = usage.cost_usd?.total;
+  const model       = usage.model ? ` · ${usage.model}` : '';
+
+  let parts = [`${totalTokens.toLocaleString()} tokens`];
+  if (cacheRead)  parts.push(`${(cacheRead / 1000).toFixed(0)}k cached`);
+  if (cacheWrite) parts.push(`${(cacheWrite / 1000).toFixed(0)}k written`);
+  if (cost)       parts.push(`$${cost.toFixed(4)}`);
+  parts.push(model.trim());
+
+  document.getElementById('usage-badge').textContent = parts.filter(Boolean).join(' · ');
 }
 
 /* ═══════════════════════════════════════════════════════════

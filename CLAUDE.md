@@ -39,32 +39,48 @@ studio-composer-assistant/
 ```json
 {
   "input": {
-    "messages": [{ "role": "user", "content": "<user prompt>" }],
-    "thread_id": "<session UUID>",
-    "model": "pro",
+    "question": "<user prompt>",
     "code": "<attached JSON content, or \"Base\" if no file>"
-  }
+  },
+  "config": {
+    "configurable": {
+      "thread_id": "<session UUID>",
+      "model": "pro"
+    }
+  },
+  "kwargs": {}
 }
 ```
 
 | Field | Rule |
 |-------|------|
-| `input.messages` | Array with single user message |
-| `input.code` | Content of attached JSON file; defaults to `"Base"` when no file |
-| `input.thread_id` | UUID generated once per page load — never changes mid-session |
-| `input.model` | Always `"pro"` |
+| `input.question` | User's natural language prompt |
+| `input.code` | Attached JSON file content; defaults to `"Base"` when no file |
+| `config.configurable.thread_id` | UUID generated once per page load — never changes mid-session |
+| `config.configurable.model` | `"pro"` (full) or `"fast"` (haiku) |
 
-**Response shape** (accumulated from stream):
+**Response shape** — two modes:
+
+*FlexiPage generation* (`output.mode: "create"` / `"edit"`):
 ```json
 {
-  "output": {
-    "flexipage": { ... },
-    "validation": { "is_valid": true, "errors": [] },
-    "mode": "create"
-  },
+  "output": { "flexipage": { ... }, "validation": { "is_valid": true, "errors": [] }, "mode": "create" },
+  "metadata": { "thread_id": "...", "usage": { ... } }
+}
+```
+
+*Assistant answer* (`output.mode: "assistant"`):
+```json
+{
+  "output": { "answer": "# Markdown text...", "mode": "assistant" },
   "metadata": {
     "thread_id": "...",
-    "usage": { "input_tokens": 0, "output_tokens": 0, "cost_usd": { "total": 0 } }
+    "usage": {
+      "input_tokens": 30, "output_tokens": 1065,
+      "cache_read_tokens": 0, "cache_creation_tokens": 36036,
+      "cost_usd": { "input": 0.000024, "output": 0.00426, "cache_write": 0.036036, "total": 0.04032 },
+      "model": "claude-haiku-4-5"
+    }
   }
 }
 ```
