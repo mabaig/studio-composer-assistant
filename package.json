@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "ingest": "node --max-old-space-size=2048 openapi-ingestor/ingest.js",
-    "search": "node openapi-ingestor/search.js"
+    "search": "node openapi-ingestor/search.js",
+    "ingest-javadoc": "node javadoc-ingestor/ingest-javadoc.js"
   },
   "engines": {
     "node": ">=18"

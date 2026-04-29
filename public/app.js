@@ -16,12 +16,14 @@ const AUTH_KEY    = 'composer_auth';
 const THEME_KEY   = 'composer_theme';
 const CREDS       = { user: 'intellinum.scm', pass: 'Welcome10' };
 
-let attachedFile  = null;   // { name, content }
-let lastFlexipage = null;
-let isStreaming   = false;
-let turns         = [];     // [{ question, time, result, tokenText }]
-let historyOpen   = false;
-let currentMode   = 'new';  // 'new' | 'assistant' | 'edit'
+let attachedFile     = null;   // { name, content }
+let lastFlexipage    = null;
+let isStreaming      = false;
+let turns            = [];     // [{ question, time, result, tokenText }]
+let historyOpen      = false;
+let currentMode      = 'new';  // 'new' | 'assistant' | 'edit'
+let _diffOriginalFp  = null;
+let _diffGeneratedFp = null;
 
 /* ═══════════════════════════════════════════════════════════
    Boot
@@ -63,14 +65,18 @@ function applyTheme(t) {
    Login
 ═══════════════════════════════════════════════════════════ */
 function initLogin() {
+  // Always attach submit handler so logout → re-login works without a full reload
+  const form = document.getElementById('login-form');
+  form.removeEventListener('submit', handleLogin);
+  form.addEventListener('submit', handleLogin);
+
   if (sessionStorage.getItem(AUTH_KEY)) {
+    document.getElementById('login-overlay').style.display = 'none';
     showApp();
-    return;
+  } else {
+    document.getElementById('login-overlay').style.display = 'flex';
+    setTimeout(() => document.getElementById('login-username')?.focus(), 50);
   }
-  document.getElementById('login-overlay').style.display = 'flex';
-  document.getElementById('login-form').addEventListener('submit', handleLogin);
-  // Focus username on load
-  setTimeout(() => document.getElementById('login-username')?.focus(), 50);
 }
 
 function handleLogin(e) {
@@ -91,10 +97,18 @@ function handleLogin(e) {
 }
 
 function showApp() {
-  const app = document.getElementById('app');
-  app.classList.add('visible');
-  // Init theme icon after DOM is visible
+  document.getElementById('app').classList.add('visible');
   applyTheme(localStorage.getItem(THEME_KEY) || 'dark');
+}
+
+function handleLogout() {
+  sessionStorage.removeItem(AUTH_KEY);
+  document.getElementById('app').classList.remove('visible');
+  document.getElementById('login-overlay').style.display = 'flex';
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-password').value = '';
+  document.getElementById('login-error').textContent = '';
+  setTimeout(() => document.getElementById('login-username')?.focus(), 50);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -131,6 +145,33 @@ function initResizer() {
     handle.classList.remove('dragging');
     document.body.classList.remove('resizing');
   });
+
+  // Vertical resize inside chat panel (message list vs input area)
+  const vHandle   = document.getElementById('chat-v-resize');
+  const msgList   = document.getElementById('message-list');
+  if (vHandle && msgList) {
+    let vDrag = false, vStartY, vStartH;
+    vHandle.addEventListener('mousedown', (e) => {
+      vDrag   = true;
+      vStartY = e.clientY;
+      vStartH = msgList.offsetHeight;
+      vHandle.classList.add('dragging');
+      document.body.classList.add('resizing');
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!vDrag) return;
+      const newH = Math.max(60, Math.min(vStartH + (e.clientY - vStartY), window.innerHeight * 0.65));
+      msgList.style.height = newH + 'px';
+      msgList.style.flex   = 'none';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!vDrag) return;
+      vDrag = false;
+      vHandle.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+    });
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -210,6 +251,9 @@ function wireUI() {
     applyTheme(cur === 'dark' ? 'light' : 'dark');
   });
 
+  // Logout
+  document.getElementById('btn-logout')?.addEventListener('click', handleLogout);
+
   // Example chips
   document.querySelectorAll('.chip').forEach(chip => {
     chip.addEventListener('click', () => {
@@ -243,7 +287,9 @@ function wireUI() {
     if (isStreaming) return;
     sessionStorage.removeItem(SESSION_KEY);
     clearAttachment();
-    currentMode = 'new';
+    currentMode      = 'new';
+    _diffOriginalFp  = null;
+    _diffGeneratedFp = null;
     document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === 'new'));
     document.getElementById('message-list').innerHTML =
       '<div class="welcome-message"><p>Describe the FlexiPage you want to build. Pick an example below or type your own prompt.</p></div>';
@@ -288,6 +334,18 @@ function wireUI() {
     apiQ.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('api-search-panel').style.display = 'none'; });
   }
 
+  // JavaDoc search panel
+  document.getElementById('btn-javadoc-search')?.addEventListener('click', toggleJavadocSearch);
+  document.getElementById('javadoc-search-close')?.addEventListener('click', () => {
+    document.getElementById('javadoc-search-panel').style.display = 'none';
+    document.getElementById('btn-javadoc-search')?.classList.remove('active');
+  });
+  const jdQ = document.getElementById('javadoc-search-q');
+  if (jdQ) {
+    jdQ.addEventListener('input', () => debounceJavadocSearch(jdQ.value));
+    jdQ.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('javadoc-search-panel').style.display = 'none'; });
+  }
+
   // Copy
   document.getElementById('btn-copy')?.addEventListener('click', copyContent);
 
@@ -314,10 +372,83 @@ function getThreadId() {
 /* ═══════════════════════════════════════════════════════════
    Send / Stream
 ═══════════════════════════════════════════════════════════ */
+/* Returns true when the prompt is purely a local review/preview request — no generation needed */
+function isLocalOnlyIntent(q) {
+  const clean  = q.toLowerCase().replace(/[.,!?]/g, '').trim();
+  const tokens = clean.split(/\s+/);
+  const ok = new Set([
+    'review','preview','validate','check','analyze','analyse',
+    'show','display','just','only','and','or','the','it','me',
+    'code','json','page','file','both','please','can','you',
+  ]);
+  return tokens.length <= 8 && tokens.every(t => ok.has(t));
+}
+
+async function handleLocalIntent(question, fp) {
+  clearResponsePanel();
+  addMessage('user', question);
+  document.getElementById('prompt-input').value = '';
+  autosize();
+  setStatus('Processing…', true);
+  document.getElementById('btn-send').disabled = true;
+  isStreaming = true;
+
+  try {
+    lastFlexipage = fp;
+    document.getElementById('btn-download').classList.add('visible');
+
+    const rc = document.getElementById('response-content');
+    rc.innerHTML = '';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'json-viewer';
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'json-code';
+    code.innerHTML = syntaxHighlightJSON(fp);
+    pre.appendChild(code);
+    wrapper.appendChild(pre);
+    rc.appendChild(wrapper);
+    const cb = document.getElementById('btn-copy');
+    if (cb) cb.style.display = 'flex';
+
+    const q = question.toLowerCase();
+    const wantsPreview = q.includes('preview');
+    const wantsReview  = q.includes('review') || q.includes('validate') || q.includes('check') || q.includes('analyz');
+
+    renderPreview(fp);
+    runReview(fp);
+
+    if (wantsPreview && !wantsReview) switchTab('preview');
+    else if (wantsReview && !wantsPreview) switchTab('review');
+
+    addMessage('assistant', '✓ Loaded from file — no API call needed');
+    pushTurn(question, { output: { flexipage: fp }, metadata: {} }, null);
+    setStatus('Done', false);
+  } catch (err) {
+    setStatus('Error', false);
+    document.getElementById('response-content').innerHTML =
+      `<div class="error-msg">Error: ${escapeHtml(err.message)}</div>`;
+    addMessage('assistant', `✗ ${err.message}`);
+  } finally {
+    document.getElementById('btn-send').disabled = false;
+    isStreaming = false;
+  }
+}
+
 async function handleSend() {
   const promptInput = document.getElementById('prompt-input');
   const question    = promptInput.value.trim();
   if (!question || isStreaming) return;
+
+  // Skip API entirely for review/preview-only prompts
+  if (isLocalOnlyIntent(question)) {
+    let fp = null;
+    if (attachedFile) {
+      try { fp = JSON.parse(attachedFile.content); } catch { /* fall through */ }
+    }
+    if (!fp) fp = lastFlexipage;
+    if (fp) { await handleLocalIntent(question, fp); return; }
+  }
 
   addMessage('user', question);
   promptInput.value = '';
@@ -470,6 +601,7 @@ function renderFinalResult(parsed) {
 
   const fp     = parsed?.output?.flexipage;
   const answer = parsed?.output?.answer;
+  const mode   = parsed?.output?.mode;
 
   if (fp) {
     /* ── FlexiPage JSON output ── */
@@ -481,6 +613,15 @@ function renderFinalResult(parsed) {
       const badge = document.getElementById('validation-badge');
       badge.textContent = v.is_valid ? '✓ Valid' : '✗ Invalid';
       badge.className   = 'validation-badge ' + (v.is_valid ? 'valid' : 'invalid');
+    }
+
+    // ── Edit mode: show diff view instead of plain JSON ──
+    if (currentMode === 'edit' && attachedFile) {
+      try {
+        const origFp = JSON.parse(attachedFile.content);
+        renderDiffView(origFp, fp);
+        return;
+      } catch { /* fall through to normal rendering */ }
     }
 
     const wrapper = document.createElement('div');
@@ -496,14 +637,15 @@ function renderFinalResult(parsed) {
     const cb = document.getElementById('btn-copy');
     if (cb) cb.style.display = 'flex';
 
+    renderPreview(fp);
     runReview(fp);
 
-  } else if (answer) {
-    /* ── Assistant markdown answer ── */
-    renderMarkdown(answer);
+  } else if (mode === 'assistant' || answer !== undefined) {
+    /* ── Assistant markdown answer — render ONLY output.answer ── */
+    renderMarkdown(typeof answer === 'string' ? answer : '');
 
   } else {
-    /* ── Fallback: render raw response as JSON ── */
+    /* ── Fallback: render raw response as JSON (non-assistant, no flexipage) ── */
     const wrapper = document.createElement('div');
     wrapper.className = 'json-viewer';
     const pre  = document.createElement('pre');
@@ -681,6 +823,7 @@ function clearResponsePanel() {
   if (rb) { rb.style.display = 'none'; rb.textContent = ''; }
   const rc = document.getElementById('review-content');
   if (rc) rc.innerHTML = '<div class="empty-state"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke-width="1.2"><path d="M9 11l3 3L22 4" stroke="var(--navy-border)"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" stroke="var(--navy-border)"/></svg><p>Generate a FlexiPage to run the code review.</p></div>';
+  clearPreview();
   lastFlexipage = null;
 }
 
@@ -738,8 +881,17 @@ let _apiSearchTimer = null;
 
 function toggleApiSearch() {
   const panel  = document.getElementById('api-search-panel');
+  const jdP    = document.getElementById('javadoc-search-panel');
   const btn    = document.getElementById('btn-api-search');
+  const jdBtn  = document.getElementById('btn-javadoc-search');
   const visible = panel.style.display !== 'none';
+
+  // Close JavaDoc panel if open
+  if (!visible) {
+    jdP.style.display = 'none';
+    jdBtn?.classList.remove('active');
+  }
+
   panel.style.display = visible ? 'none' : 'block';
   btn?.classList.toggle('active', !visible);
   if (!visible) document.getElementById('api-search-q').focus();
@@ -895,18 +1047,32 @@ function pickSchema(content) {
 }
 
 function renderSchemaBlock(body) {
-  // Top-level $ref on the body object itself (e.g. Oracle's requestBodies components)
   if (body?.$ref) {
     const name = body.$ref.replace(/.*\//, '');
-    return `<div class="api-schema-ref-block">Schema: <code>${escapeHtml(name)}</code></div>`;
+    return `<div class="api-schema-ref-block">Schema: <code>${escapeHtml(name)}</code><button class="api-expand-ref-btn" onclick="expandSchemaRef(this,'${escapeHtml(name)}')">Expand ▸</button></div>`;
   }
   const schema = pickSchema(body?.content);
   if (!schema) return '<p class="api-param-desc" style="margin:4px 0 8px">No schema defined.</p>';
   if (schema.$ref) {
     const name = schema.$ref.replace(/.*\//, '');
-    return `<div class="api-schema-ref-block">Schema: <code>${escapeHtml(name)}</code></div>`;
+    return `<div class="api-schema-ref-block">Schema: <code>${escapeHtml(name)}</code><button class="api-expand-ref-btn" onclick="expandSchemaRef(this,'${escapeHtml(name)}')">Expand ▸</button></div>`;
   }
   return renderSchemaFields(schema);
+}
+
+async function expandSchemaRef(btn, schemaName) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  const container = btn.closest('.api-schema-ref-block');
+  try {
+    const res  = await fetch(`/api/schema?name=${encodeURIComponent(schemaName)}`);
+    const data = await res.json();
+    if (!data?.schema_def) { btn.disabled = false; btn.textContent = 'Not found'; return; }
+    const schema = typeof data.schema_def === 'object' ? data.schema_def : JSON.parse(data.schema_def);
+    if (container) container.outerHTML = renderSchemaFields(schema);
+  } catch {
+    btn.disabled = false; btn.textContent = 'Error';
+  }
 }
 
 function renderSchemaFields(schema) {
@@ -1012,4 +1178,634 @@ async function copyContent() {
 
 function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   JSON Diff (Edit mode)
+═══════════════════════════════════════════════════════════ */
+
+function computeJsonDiffs(orig, gen, path) {
+  if (path === undefined) path = '';
+  const diffs = [];
+  if (orig === gen) return diffs;
+
+  if (
+    typeof orig !== typeof gen ||
+    orig === null || gen === null ||
+    Array.isArray(orig) !== Array.isArray(gen) ||
+    typeof orig !== 'object'
+  ) {
+    diffs.push({ path, type: 'modified', from: orig, to: gen });
+    return diffs;
+  }
+
+  if (Array.isArray(orig)) {
+    const maxLen = Math.max(orig.length, gen.length);
+    for (let i = 0; i < maxLen; i++) {
+      const cp = path ? `${path}[${i}]` : `[${i}]`;
+      if (i >= orig.length)   diffs.push({ path: cp, type: 'added',   to: gen[i] });
+      else if (i >= gen.length) diffs.push({ path: cp, type: 'removed', from: orig[i] });
+      else                    diffs.push(...computeJsonDiffs(orig[i], gen[i], cp));
+    }
+    return diffs;
+  }
+
+  for (const key of new Set([...Object.keys(orig), ...Object.keys(gen)])) {
+    const cp = path ? `${path}.${key}` : key;
+    if (!(key in orig))    diffs.push({ path: cp, type: 'added',   to: gen[key] });
+    else if (!(key in gen)) diffs.push({ path: cp, type: 'removed', from: orig[key] });
+    else                   diffs.push(...computeJsonDiffs(orig[key], gen[key], cp));
+  }
+  return diffs;
+}
+
+function isScriptValue(v) {
+  if (typeof v !== 'string') return false;
+  return v.startsWith('script:') || (v.includes('\n') && v.length > 120);
+}
+
+function computeLineDiff(oldText, newText) {
+  const ol = oldText.replace(/\r\n/g, '\n').split('\n');
+  const nl = newText.replace(/\r\n/g, '\n').split('\n');
+  const m = ol.length, n = nl.length;
+
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = ol[i - 1] === nl[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+
+  const result = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && ol[i - 1] === nl[j - 1]) {
+      result.push({ type: 'same',    text: ol[i - 1] }); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.push({ type: 'added',   text: nl[j - 1] }); j--;
+    } else {
+      result.push({ type: 'removed', text: ol[i - 1] }); i--;
+    }
+  }
+  return result.reverse();
+}
+
+function renderScriptDiff(from, to) {
+  const lines = computeLineDiff(String(from), String(to));
+  const parts = ['<div class="script-diff">'];
+  for (const line of lines) {
+    const prefix = line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ';
+    parts.push(`<div class="script-line-${line.type}"><span class="script-line-prefix">${prefix}</span><span>${escapeHtml(line.text)}</span></div>`);
+  }
+  parts.push('</div>');
+  return parts.join('');
+}
+
+function truncateDiffVal(val) {
+  const s = typeof val === 'object' && val !== null ? JSON.stringify(val, null, 2) : String(val ?? '');
+  return s.length > 500 ? s.slice(0, 500) + '\n…(truncated)' : s;
+}
+
+function renderDiffItem(diff, idx) {
+  const typeLabel = diff.type === 'added' ? 'Added' : diff.type === 'removed' ? 'Removed' : 'Modified';
+  let valHtml = '';
+
+  if (diff.type === 'modified' && (isScriptValue(diff.from) || isScriptValue(diff.to))) {
+    valHtml = renderScriptDiff(diff.from ?? '', diff.to ?? '');
+  } else if (diff.type === 'modified') {
+    valHtml = `<div class="diff-values">
+      <div class="diff-value diff-old"><span class="diff-val-label">Before</span><pre>${escapeHtml(truncateDiffVal(diff.from))}</pre></div>
+      <div class="diff-value diff-new"><span class="diff-val-label">After</span><pre>${escapeHtml(truncateDiffVal(diff.to))}</pre></div>
+    </div>`;
+  } else if (diff.type === 'added') {
+    valHtml = `<div class="diff-values">
+      <div class="diff-value diff-new"><span class="diff-val-label">Value</span><pre>${escapeHtml(truncateDiffVal(diff.to))}</pre></div>
+    </div>`;
+  } else {
+    valHtml = `<div class="diff-values">
+      <div class="diff-value diff-old"><span class="diff-val-label">Was</span><pre>${escapeHtml(truncateDiffVal(diff.from))}</pre></div>
+    </div>`;
+  }
+
+  return `<div class="diff-item" id="diff-item-${idx}">
+    <div class="diff-item-header">
+      <span class="diff-path">${escapeHtml(diff.path)}</span>
+      <span class="diff-type-badge diff-type-${diff.type}">${typeLabel}</span>
+    </div>
+    ${valHtml}
+  </div>`;
+}
+
+function renderDiffView(originalFp, generatedFp) {
+  _diffOriginalFp  = originalFp;
+  _diffGeneratedFp = generatedFp;
+
+  const diffs    = computeJsonDiffs(originalFp, generatedFp);
+  const added    = diffs.filter(d => d.type === 'added').length;
+  const modified = diffs.filter(d => d.type === 'modified').length;
+  const removed  = diffs.filter(d => d.type === 'removed').length;
+
+  const MAX = 150;
+  const toRender = diffs.slice(0, MAX);
+  const overflow = diffs.length > MAX;
+
+  const badgesHtml = [
+    added    ? `<span class="diff-summary-badge diff-badge-added">+${added} added</span>`         : '',
+    modified ? `<span class="diff-summary-badge diff-badge-modified">~${modified} changed</span>` : '',
+    removed  ? `<span class="diff-summary-badge diff-badge-removed">-${removed} removed</span>`   : '',
+  ].filter(Boolean).join('') || '<span class="diff-no-changes-label">No changes detected</span>';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'diff-view';
+  wrapper.innerHTML = `
+    <div class="diff-toolbar">
+      <div class="diff-summary">${badgesHtml}</div>
+      <div class="diff-actions">
+        <button class="diff-action-btn diff-keep"   onclick="keepOriginal()">Keep Original</button>
+        <button class="diff-action-btn diff-accept" onclick="acceptAllChanges()">Accept All Changes</button>
+      </div>
+    </div>
+    <div class="diff-list">
+      ${toRender.map((d, i) => renderDiffItem(d, i)).join('')}
+      ${overflow  ? `<div class="diff-overflow-notice">+ ${diffs.length - MAX} more changes not shown</div>` : ''}
+      ${!diffs.length ? '<div class="diff-no-changes-msg">The generated FlexiPage is identical to the original.</div>' : ''}
+    </div>`;
+
+  document.getElementById('response-content').appendChild(wrapper);
+  const cb = document.getElementById('btn-copy');
+  if (cb) cb.style.display = 'flex';
+}
+
+function acceptAllChanges() {
+  if (!_diffGeneratedFp) return;
+  lastFlexipage    = _diffGeneratedFp;
+  _diffOriginalFp  = null;
+  _diffGeneratedFp = null;
+
+  const rc = document.getElementById('response-content');
+  rc.innerHTML = '';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'json-viewer';
+  const pre  = document.createElement('pre');
+  const code = document.createElement('code');
+  code.className = 'json-code';
+  code.innerHTML = syntaxHighlightJSON(lastFlexipage);
+  pre.appendChild(code);
+  wrapper.appendChild(pre);
+  rc.appendChild(wrapper);
+
+  document.getElementById('btn-download').classList.add('visible');
+  renderPreview(lastFlexipage);
+  runReview(lastFlexipage);
+}
+
+function keepOriginal() {
+  _diffOriginalFp  = null;
+  _diffGeneratedFp = null;
+  clearResponsePanel();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Script dialog
+═══════════════════════════════════════════════════════════ */
+const SCRIPT_STORE = [];
+
+function showScriptDialogByIdx(idx) { showScriptDialog(SCRIPT_STORE[idx] || ''); }
+
+function showScriptDialog(raw) {
+  const overlay = document.getElementById('script-dialog-overlay');
+  const code    = document.getElementById('script-dialog-code');
+  const title   = document.getElementById('script-dialog-title');
+  const isGroovy = raw.startsWith('groovy:');
+  const src = raw.replace(/^(script:|groovy:)\s*/i, '').trim();
+  code.textContent = src;
+  code.className = isGroovy ? 'language-groovy' : 'language-java';
+  title.textContent = isGroovy ? 'Groovy Script' : 'Java Script';
+  if (typeof hljs !== 'undefined') hljs.highlightElement(code);
+  overlay.style.display = 'flex';
+}
+
+function closeScriptDialog(e) {
+  if (e && e.target !== document.getElementById('script-dialog-overlay')) return;
+  document.getElementById('script-dialog-overlay').style.display = 'none';
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Page Preview (mockup renderer)
+═══════════════════════════════════════════════════════════ */
+
+function clearPreview() {
+  const pc = document.getElementById('preview-content');
+  if (!pc) return;
+  pc.innerHTML = '<div class="empty-state"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke-width="1.2"><rect x="2" y="3" width="20" height="14" rx="2" stroke="var(--navy-border)"/><path d="M8 21h8M12 17v4" stroke="var(--navy-border)"/></svg><p>Generate a FlexiPage to see the page mockup.</p></div>';
+  const pb = document.getElementById('preview-badge');
+  if (pb) pb.style.display = 'none';
+}
+
+// Walk the entire JSON tree and collect every node that has both `type` and `properties`
+function collectFlexiNodes(root) {
+  const nodes = [];
+  function walk(obj) {
+    if (!obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) { obj.forEach(walk); return; }
+    if (obj.type && obj.properties && typeof obj.properties === 'object') nodes.push(obj);
+    for (const v of Object.values(obj)) { if (v && typeof v === 'object') walk(v); }
+  }
+  walk(root);
+  return nodes;
+}
+
+const _INFRA_TYPES = new Set(['page', 'div', 'webservice', 'function', 'variable', 'handler', 'event']);
+
+function nodeKind(typeStr) {
+  const t = (typeStr || '').toLowerCase().replace(/[_\s-]/g, '');
+  if (/button|btn|submit|action/.test(t))                   return 'button';
+  if (/scan|barcode|camera/.test(t))                        return 'scan';
+  if (/table|grid|datatable|listview/.test(t))              return 'table';
+  if (/textarea|multiline/.test(t))                         return 'textarea';
+  if (/^(lov|dropdown|select|combobox|listofvalues)$/.test(t)) return 'lov';
+  if (/checkbox|toggle|switch/.test(t))                     return 'checkbox';
+  if (/^radio/.test(t))                                     return 'radio';
+  if (/label|statictext|heading/.test(t))                   return 'label';
+  if (/field|input|text|number|date|time|email|phone|url|lookup|currency/.test(t)) return 'input';
+  if (/header|banner|title/.test(t))                        return 'header';
+  return 'generic';
+}
+
+function hasScriptProp(props) {
+  return Object.values(props).some(v =>
+    typeof v === 'string' && (v.startsWith('script:') || v.startsWith('groovy:'))
+  );
+}
+
+function renderPreviewNode(node) {
+  const type  = (node.type  || '').toLowerCase();
+  const props = node.properties || {};
+  const kind  = nodeKind(type);
+  const label = props.label || props.text || props.title || props.placeholder || props.id || type;
+  const req   = String(props.required || '').toLowerCase() === 'true';
+
+  // Script badge
+  const scriptEntries = Object.entries(props).filter(([, v]) =>
+    typeof v === 'string' && (v.startsWith('script:') || v.startsWith('groovy:'))
+  );
+  let scriptBadge = '';
+  if (scriptEntries.length) {
+    const idx = SCRIPT_STORE.push(scriptEntries[0][1]) - 1;
+    scriptBadge = `<button class="mobile-script-badge" onclick="showScriptDialogByIdx(${idx})">⚡ script</button>`;
+  }
+
+  const searchSvg = `<svg class="mobile-field-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#009FDE" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`;
+  const scanSvg   = `<svg class="mobile-field-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#009FDE" stroke-width="1.8"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="16" y="3" width="5" height="5" rx="1"/><rect x="3" y="16" width="5" height="5" rx="1"/><path d="M16 16h5v5"/><path d="M9 5.5h6"/><path d="M5.5 9v6"/></svg>`;
+
+  if (kind === 'button') {
+    const v = (props.variant || props._class || '').toLowerCase();
+    const cls = v.includes('danger') || v.includes('destruct') ? 'mobile-btn-danger'
+      : v.includes('secondary') || v.includes('neutral') ? 'mobile-btn-secondary'
+      : 'mobile-btn-primary';
+    return `<div>${scriptBadge}<button class="mobile-btn ${cls}" disabled>${escapeHtml(label)}</button></div>`;
+  }
+
+  if (kind === 'input' || kind === 'lov' || kind === 'textarea') {
+    return `<div class="mobile-field-group">
+      <div class="mobile-field-card">
+        <div class="mobile-field-inner">
+          <span class="mobile-field-lbl">${escapeHtml(label)}</span>
+          <span class="mobile-field-val">&hairsp;</span>
+        </div>${searchSvg}
+      </div>
+      ${req ? '<span class="mobile-req-text">Required</span>' : ''}
+      ${scriptBadge}
+    </div>`;
+  }
+
+  if (kind === 'scan') {
+    return `<div class="mobile-field-group">
+      <div class="mobile-field-card">
+        <div class="mobile-field-inner">
+          <span class="mobile-field-lbl">${escapeHtml(label)}</span>
+          <span class="mobile-field-val">&hairsp;</span>
+        </div>${scanSvg}
+      </div>
+      ${req ? '<span class="mobile-req-text">Required</span>' : ''}
+      ${scriptBadge}
+    </div>`;
+  }
+
+  if (kind === 'checkbox' || kind === 'radio') {
+    const shape = kind === 'radio'
+      ? `<span class="mobile-radio-dot"></span>`
+      : `<span class="mobile-checkbox-tick"></span>`;
+    return `<div class="mobile-check-row">${shape}<span class="mobile-check-lbl">${escapeHtml(label)}</span>${scriptBadge}</div>`;
+  }
+
+  if (kind === 'table') {
+    const cols = (props.columns || props.fields || '').split(',').map(c => c.trim()).filter(Boolean).slice(0, 4);
+    if (!cols.length) cols.push('Col 1', 'Col 2', 'Col 3');
+    return `<div class="mobile-table-card">${scriptBadge}
+      <div class="mobile-tbl-head">${cols.map(c => `<span>${escapeHtml(c)}</span>`).join('')}</div>
+      <div class="mobile-tbl-row">${cols.map(() => '<span class="mobile-tbl-cell"></span>').join('')}</div>
+      <div class="mobile-tbl-row alt">${cols.map(() => '<span class="mobile-tbl-cell"></span>').join('')}</div>
+    </div>`;
+  }
+
+  if (kind === 'header') {
+    return `<div class="mobile-section-hdr">${escapeHtml(label)}${scriptBadge}</div>`;
+  }
+
+  if (kind === 'label') {
+    return `<div class="mobile-label-text">${escapeHtml(label)}${scriptBadge}</div>`;
+  }
+
+  return `<div class="mobile-generic-comp">${escapeHtml(label || type)}${scriptBadge}</div>`;
+}
+
+function renderPreview(fp) {
+  const pc = document.getElementById('preview-content');
+  if (!pc || !fp) return;
+
+  SCRIPT_STORE.length = 0;
+
+  const allNodes  = collectFlexiNodes(fp);
+  const pageNode  = allNodes.find(n => (n.type || '').toLowerCase() === 'page');
+  const pageProps = pageNode?.properties || {};
+  const pageTitle = pageProps.title || pageProps.label || pageProps.id || fp.masterLabel || fp.label || 'FlexiPage';
+
+  const uiNodes = allNodes.filter(n => !_INFRA_TYPES.has((n.type || '').toLowerCase()));
+  const wsNodes = allNodes.filter(n => (n.type || '').toLowerCase() === 'webservice');
+  const fnNodes = allNodes.filter(n => (n.type || '').toLowerCase() === 'function');
+
+  const fieldsHtml = uiNodes.length
+    ? uiNodes.map(renderPreviewNode).join('')
+    : '<p class="mobile-empty-msg">No UI components found</p>';
+
+  let metaHtml = '';
+  if (wsNodes.length) {
+    metaHtml += `<div class="preview-services">
+      <div class="preview-services-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+        Data Services
+      </div>
+      ${wsNodes.map(ws => {
+        const p = ws.properties || {};
+        const wid = p.id || '—';
+        const url = p._wsurl || '';
+        const op  = (p._operationType || 'GET').toUpperCase();
+        const shortUrl = url.length > 55 ? url.slice(0, 55) + '…' : url;
+        return `<div class="preview-service-row">
+          <span class="preview-svc-id">${escapeHtml(wid)}</span>
+          ${url ? `<span class="api-method api-method-${op}">${op}</span><span class="preview-svc-url">${escapeHtml(shortUrl)}</span>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+  }
+  if (fnNodes.length) {
+    metaHtml += `<div class="preview-services">
+      <div class="preview-services-title">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        Functions
+      </div>
+      <div class="preview-fn-list">
+        ${fnNodes.map(fn => `<span class="preview-fn-chip">${escapeHtml(fn.properties?.id || 'fn')}</span>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  pc.innerHTML = `
+    <div class="mobile-preview-wrap">
+      <div class="mobile-phone-shell">
+        <div class="mobile-statusbar">
+          <span class="mobile-time">12:00</span>
+          <div class="mobile-status-icons">
+            <svg width="14" height="10" viewBox="0 0 24 16" fill="currentColor"><path d="M12 2C7 2 3 4.4 0 8c3 3.6 7 6 12 6s9-2.4 12-6C21 4.4 17 2 12 2zm0 10a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm0-2a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>
+            <svg width="16" height="10" viewBox="0 0 26 16" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="1" y="2" width="20" height="12" rx="2"/><path d="M23 6v4" stroke-width="3" stroke-linecap="round"/></svg>
+          </div>
+        </div>
+        <div class="mobile-appbar">
+          <div class="mobile-back-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+          </div>
+          <span class="mobile-page-title">${escapeHtml(pageTitle)}</span>
+          <div class="mobile-app-icon">
+            <svg width="22" height="22" viewBox="0 0 32 32">
+              <rect width="32" height="32" rx="7" fill="#F47920"/>
+              <polygon points="16,4 26,9.5 26,22.5 16,28 6,22.5 6,9.5" fill="rgba(255,255,255,0.15)"/>
+              <polygon points="16,9 21,12 21,20 16,23 11,20 11,12" fill="rgba(255,255,255,0.9)"/>
+            </svg>
+          </div>
+        </div>
+        <div class="mobile-scroll-content">
+          ${fieldsHtml}
+        </div>
+        <div class="mobile-action-bar">
+          <button class="mobile-bar-btn" title="Menu">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <button class="mobile-bar-btn" title="Barcode">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9V5a2 2 0 0 1 2-2h4M3 15v4a2 2 0 0 0 2 2h4M21 9V5a2 2 0 0 0-2-2h-4M21 15v4a2 2 0 0 1-2 2h-4"/><line x1="7" y1="8" x2="7" y2="16"/><line x1="10" y1="8" x2="10" y2="16"/><line x1="13" y1="8" x2="13" y2="16"/><line x1="16" y1="8" x2="16" y2="11"/><line x1="16" y1="13" x2="16" y2="16"/></svg>
+          </button>
+          <button class="mobile-bar-btn" title="QR scan">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="5" height="5" rx="1"/><rect x="16" y="3" width="5" height="5" rx="1"/><rect x="3" y="16" width="5" height="5" rx="1"/><path d="M16 16h5v5"/></svg>
+          </button>
+          <button class="mobile-bar-btn" title="Clear">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 5H9l-7 7 7 7h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/><line x1="18" y1="9" x2="12" y2="15"/><line x1="12" y1="9" x2="18" y2="15"/></svg>
+          </button>
+          <button class="mobile-bar-btn" title="More">
+            <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="19" r="1.5" fill="currentColor"/></svg>
+          </button>
+        </div>
+        <div class="mobile-nav-bar">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12,4 4,20 20,20"/></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/></svg>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+        </div>
+      </div>
+      ${metaHtml ? `<div class="mobile-meta-side">${metaHtml}</div>` : ''}
+    </div>`;
+
+  const pb = document.getElementById('preview-badge');
+  if (pb) { pb.textContent = uiNodes.length; pb.style.display = uiNodes.length ? 'inline-flex' : 'none'; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   JavaDoc Search
+═══════════════════════════════════════════════════════════ */
+let _javadocSearchTimer = null;
+
+function toggleJavadocSearch() {
+  const panel  = document.getElementById('javadoc-search-panel');
+  const apiP   = document.getElementById('api-search-panel');
+  const btn    = document.getElementById('btn-javadoc-search');
+  const apiBtn = document.getElementById('btn-api-search');
+  const visible = panel.style.display !== 'none';
+
+  // Close SCM panel if open
+  if (!visible) {
+    apiP.style.display = 'none';
+    apiBtn?.classList.remove('active');
+  }
+
+  panel.style.display = visible ? 'none' : 'block';
+  btn?.classList.toggle('active', !visible);
+  if (!visible) document.getElementById('javadoc-search-q').focus();
+}
+
+function debounceJavadocSearch(q) {
+  clearTimeout(_javadocSearchTimer);
+  const el = document.getElementById('javadoc-search-results');
+  if (!q.trim()) {
+    el.innerHTML = '<p class="api-search-hint">Search FlexiPro Java API — classes, methods, fields</p>';
+    return;
+  }
+  el.innerHTML = '<p class="api-search-hint">Searching…</p>';
+  _javadocSearchTimer = setTimeout(() => runJavadocSearch(q), 300);
+}
+
+async function runJavadocSearch(q) {
+  const el = document.getElementById('javadoc-search-results');
+  try {
+    const res  = await fetch(`/api/search-javadoc?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderJavadocResults(data);
+  } catch (err) {
+    el.innerHTML = `<p class="api-search-hint" style="color:#ff6b6b">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderJavadocResults(results) {
+  const el = document.getElementById('javadoc-search-results');
+  if (!results.length) {
+    el.innerHTML = '<p class="api-search-hint">No results found</p>';
+    return;
+  }
+  el.innerHTML = results.map((r, i) => {
+    const isClass  = r.result_type === 'class';
+    const typeBadge = isClass
+      ? `<span class="jd-type-badge jd-type-${r.class_type || 'class'}">${r.class_type || 'class'}</span>`
+      : `<span class="jd-type-badge jd-type-${r.member_type || 'method'}">${r.member_type || 'method'}</span>`;
+
+    const subtitle = isClass
+      ? escapeHtml(r.package_name || r.qualified_name || '')
+      : `<span class="jd-member-class">${escapeHtml(r.qualified_class_name || '')}</span>`;
+
+    const summary = r.summary
+      ? `<span class="api-result-summary">${escapeHtml(r.summary.slice(0, 80))}${r.summary.length > 80 ? '…' : ''}</span>`
+      : '';
+
+    return `<div class="api-result-item">
+      <button class="api-result-header" onclick="toggleJavadocDetail(this, ${i}, '${escapeHtml(isClass ? r.name : (r.qualified_class_name || r.name))}', ${isClass})">
+        ${typeBadge}
+        <span class="api-result-path">${escapeHtml(r.name)}</span>
+        ${summary}
+        <svg class="api-result-chevron" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+      </button>
+      <div class="jd-result-sub">${subtitle}</div>
+      <div class="api-result-detail" id="jd-detail-${i}" style="display:none"></div>
+    </div>`;
+  }).join('');
+}
+
+async function toggleJavadocDetail(btn, idx, className, isClass) {
+  const detailEl = document.getElementById(`jd-detail-${idx}`);
+  const chevron  = btn.querySelector('.api-result-chevron');
+  const open     = detailEl.style.display !== 'none';
+
+  if (open) {
+    detailEl.style.display = 'none';
+    chevron?.classList.remove('open');
+    return;
+  }
+
+  detailEl.style.display = 'block';
+  chevron?.classList.add('open');
+  if (detailEl.dataset.loaded) return;
+
+  detailEl.innerHTML = '<p class="api-search-hint">Loading…</p>';
+
+  try {
+    const res  = await fetch(`/api/javadoc-class?name=${encodeURIComponent(className)}`);
+    const data = await res.json();
+
+    if (!data) {
+      detailEl.innerHTML = '<p class="api-search-hint">No detail found</p>';
+      return;
+    }
+
+    const { cls, members } = data;
+    detailEl._jdData = data;
+
+    const parts = [];
+    if (cls.summary) {
+      parts.push(`<p class="api-detail-desc">${escapeHtml(cls.summary.slice(0, 200))}${cls.summary.length > 200 ? '…' : ''}</p>`);
+    }
+
+    const byType = { constructor: [], method: [], field: [] };
+    for (const m of members) {
+      const key = m.member_type in byType ? m.member_type : 'method';
+      byType[key].push(m);
+    }
+
+    for (const [mtype, list] of Object.entries(byType)) {
+      if (!list.length) continue;
+      parts.push(`<p class="api-detail-label">${mtype.charAt(0).toUpperCase() + mtype.slice(1)}s <span class="api-detail-count">${list.length}</span></p>`);
+      parts.push('<div class="jd-member-list">');
+      for (const m of list) {
+        const ret = m.return_type ? `<span class="jd-return-type">${escapeHtml(m.return_type)}</span>` : '';
+        const sig = m.signature && m.signature !== m.name
+          ? `<code class="jd-signature">${escapeHtml(m.signature)}</code>` : '';
+        const desc = m.summary ? `<p class="api-param-desc">${escapeHtml(m.summary.slice(0, 120))}${m.summary.length > 120 ? '…' : ''}</p>` : '';
+        parts.push(`<div class="jd-member-item">
+          <div class="jd-member-meta">
+            ${ret}
+            <code class="api-param-name">${escapeHtml(m.name)}</code>
+            ${sig}
+          </div>
+          ${desc}
+        </div>`);
+      }
+      parts.push('</div>');
+    }
+
+    parts.push(`<button class="api-use-btn" onclick="injectJavadocContext(${idx})">+ Add to prompt</button>`);
+    parts.push(`<a href="/flexipro-javadoc/${cls.qualified_name?.replace(/\./g, '/')}.html" target="_blank" class="jd-browse-class-link">View in JavaDoc ↗</a>`);
+
+    detailEl.innerHTML = `<div class="api-detail-block">${parts.join('')}</div>`;
+    detailEl.dataset.loaded = '1';
+  } catch (err) {
+    detailEl.innerHTML = `<p class="api-search-hint" style="color:#ff6b6b">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function injectJavadocContext(idx) {
+  const detailEl = document.getElementById(`jd-detail-${idx}`);
+  const data     = detailEl?._jdData;
+  if (!data) return;
+
+  const { cls, members } = data;
+  const lines = [`[JavaDoc: ${cls.qualified_name || cls.class_name}]`];
+  lines.push(`${cls.class_type || 'class'} ${cls.class_name} (${cls.package_name || ''})`);
+  if (cls.summary) lines.push(cls.summary.slice(0, 150));
+  lines.push('');
+
+  const methods = members.filter(m => m.member_type === 'method').slice(0, 8);
+  if (methods.length) {
+    lines.push('Key methods:');
+    for (const m of methods) {
+      lines.push(`  ${m.return_type ? m.return_type + ' ' : ''}${m.signature || m.name}${m.summary ? ' — ' + m.summary.slice(0, 60) : ''}`);
+    }
+    lines.push('');
+  }
+
+  const block = lines.join('\n').trim() + '\n\n';
+  const ta    = document.getElementById('prompt-input');
+  ta.value    = block + ta.value;
+  ta.focus();
+  ta.setSelectionRange(block.length, block.length);
+  autosize();
+  document.getElementById('javadoc-search-panel').style.display = 'none';
+  document.getElementById('btn-javadoc-search')?.classList.remove('active');
 }

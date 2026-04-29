@@ -65,6 +65,13 @@
           <button id="btn-theme" class="btn-icon" title="Toggle theme" aria-label="Toggle theme">
             <!-- icon updated by JS -->
           </button>
+          <button id="btn-logout" class="btn-icon" title="Sign out" aria-label="Sign out">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+          </button>
           <button id="btn-new-chat" class="btn-new" title="Start a new chat">+ New</button>
         </div>
       </header>
@@ -87,6 +94,8 @@
           <p>Describe the FlexiPage you want to build. Pick an example below or type your own prompt.</p>
         </div>
       </div>
+
+      <div class="chat-v-resize" id="chat-v-resize" title="Drag to resize"></div>
 
       <div class="chat-input-area">
         <div class="examples">
@@ -120,6 +129,19 @@
           </div>
         </div>
 
+        <!-- JavaDoc Search panel -->
+        <div class="api-search-panel" id="javadoc-search-panel" style="display:none">
+          <div class="api-search-bar">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="javadoc-search-q" placeholder="Search FlexiPro Java classes &amp; methods…" autocomplete="off" spellcheck="false">
+            <a href="/flexipro-javadoc/index.html" target="_blank" class="javadoc-browse-link" title="Browse JavaDoc in new tab">Browse ↗</a>
+            <button id="javadoc-search-close" class="btn-remove-file" title="Close">×</button>
+          </div>
+          <div class="api-search-results" id="javadoc-search-results">
+            <p class="api-search-hint">Search FlexiPro Java API — classes, methods, fields</p>
+          </div>
+        </div>
+
         <div class="attachment-row" id="attachment-row">
           <span class="attachment-chip">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -132,6 +154,16 @@
           <button id="btn-api-search" class="btn-attach btn-api-search-toggle" title="Search Oracle SCM REST APIs">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <span class="btn-api-label">SCM REST</span>
+          </button>
+          <button id="btn-javadoc-search" class="btn-attach btn-javadoc-search-toggle" title="Search FlexiPro JavaDoc">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="8" y="13" width="8" height="8" rx="1"/>
+              <path d="M7 13h10l1.5-8h-13L7 13z"/>
+              <line x1="12" y1="1" x2="12" y2="3"/>
+              <line x1="5.5" y1="2.5" x2="7" y2="4.5"/>
+              <line x1="18.5" y1="2.5" x2="17" y2="4.5"/>
+            </svg>
+            <span class="btn-api-label">JavaDoc</span>
           </button>
           <label class="btn-attach" title="Attach a JSON file (sent as code context)">
             <input type="file" id="file-input" accept=".json">
@@ -159,6 +191,10 @@
             <button class="tab" id="tab-review" onclick="switchTab('review')">
               Review
               <span class="review-badge" id="review-badge" style="display:none"></span>
+            </button>
+            <button class="tab" id="tab-preview" onclick="switchTab('preview')">
+              Preview
+              <span class="preview-badge" id="preview-badge" style="display:none"></span>
             </button>
           </div>
           <span class="validation-badge" id="validation-badge"></span>
@@ -198,8 +234,32 @@
           </div>
         </div>
       </div>
+
+      <!-- Preview tab -->
+      <div class="tab-pane" id="pane-preview">
+        <div class="preview-content" id="preview-content">
+          <div class="empty-state">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke-width="1.2"><rect x="2" y="3" width="20" height="14" rx="2" stroke="var(--navy-border)"/><path d="M8 21h8M12 17v4" stroke="var(--navy-border)"/></svg>
+            <p>Generate a FlexiPage to see the page mockup.</p>
+          </div>
+        </div>
+      </div>
     </main>
 
+  </div>
+
+  <!-- Script viewer dialog -->
+  <div id="script-dialog-overlay" class="script-dialog-overlay" style="display:none" onclick="closeScriptDialog(event)">
+    <div class="script-dialog">
+      <div class="script-dialog-hdr">
+        <span style="color:var(--orange)">⚡</span>
+        <span class="script-dialog-title" id="script-dialog-title">Script</span>
+        <button class="script-dialog-close" onclick="closeScriptDialog()">×</button>
+      </div>
+      <div class="script-dialog-body">
+        <pre><code id="script-dialog-code" class="language-java"></code></pre>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

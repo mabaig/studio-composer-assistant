@@ -87,6 +87,26 @@ app.get('/api/search-api', async (req, res) => {
   }
 });
 
+/* ── SCM schema lookup ─────────────────────────────────────── */
+app.get('/api/schema', async (req, res) => {
+  const pool = getDbPool();
+  if (!pool) return res.status(503).json({ error: 'Database not configured' });
+
+  const name = (req.query.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name param required' });
+
+  try {
+    const { rows } = await pool.query(
+      'SELECT name, schema_def FROM scm_schemas WHERE name = $1',
+      [name]
+    );
+    res.json(rows[0] || null);
+  } catch (err) {
+    console.error('[/api/schema]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ── SCM endpoint detail ───────────────────────────────────── */
 app.get('/api/endpoint-detail', async (req, res) => {
   const pool = getDbPool();
@@ -110,6 +130,78 @@ app.get('/api/endpoint-detail', async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error('[/api/endpoint-detail]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ── JavaDoc search ────────────────────────────────────────── */
+app.get('/api/search-javadoc', async (req, res) => {
+  const pool = getDbPool();
+  if (!pool) return res.status(503).json({ error: 'Database not configured' });
+
+  const q = (req.query.q || '').trim();
+  if (!q) return res.json([]);
+
+  try {
+    const like = `%${q}%`;
+    const { rows } = await pool.query(`
+      SELECT 'class' AS result_type,
+             id, class_name AS name, qualified_name, package_name, class_type, summary,
+             NULL::text AS member_type, NULL::text AS signature, NULL::text AS return_type,
+             NULL::integer AS class_id, NULL::text AS qualified_class_name,
+             round(ts_rank(search_vec, plainto_tsquery('english', $1))::numeric, 4) AS rank
+      FROM javadoc_classes
+      WHERE search_vec @@ plainto_tsquery('english', $1)
+         OR class_name    ILIKE $2
+         OR qualified_name ILIKE $2
+
+      UNION ALL
+
+      SELECT 'member' AS result_type,
+             id, name, NULL AS qualified_name, NULL AS package_name, NULL AS class_type, summary,
+             member_type, signature, return_type,
+             class_id, qualified_class_name,
+             round(ts_rank(search_vec, plainto_tsquery('english', $1))::numeric, 4) AS rank
+      FROM javadoc_members
+      WHERE search_vec @@ plainto_tsquery('english', $1)
+         OR name         ILIKE $2
+         OR class_name   ILIKE $2
+
+      ORDER BY rank DESC, name
+      LIMIT 25
+    `, [q, like]);
+    res.json(rows);
+  } catch (err) {
+    console.error('[/api/search-javadoc]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ── JavaDoc class detail ──────────────────────────────────── */
+app.get('/api/javadoc-class', async (req, res) => {
+  const pool = getDbPool();
+  if (!pool) return res.status(503).json({ error: 'Database not configured' });
+
+  const name = (req.query.name || '').trim();
+  if (!name) return res.status(400).json({ error: 'name param required' });
+
+  try {
+    const clsRes = await pool.query(
+      `SELECT * FROM javadoc_classes WHERE lower(qualified_name) = lower($1) OR lower(class_name) = lower($1) LIMIT 1`,
+      [name]
+    );
+    if (!clsRes.rows.length) return res.json(null);
+    const cls = clsRes.rows[0];
+
+    const memRes = await pool.query(
+      `SELECT member_type, name, signature, return_type, summary
+       FROM javadoc_members WHERE class_id = $1
+       ORDER BY member_type, name`,
+      [cls.id]
+    );
+    res.json({ cls, members: memRes.rows });
+  } catch (err) {
+    console.error('[/api/javadoc-class]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

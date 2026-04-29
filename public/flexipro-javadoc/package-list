@@ -1,0 +1,11 @@
+com.intellinum.mia.app.device
+com.intellinum.mia.app.event
+com.intellinum.mia.app.logfire.logical.util
+com.intellinum.mia.app.runtime
+com.intellinum.mia.app.ui
+com.intellinum.mia.app.ui.logical
+com.intellinum.mia.app.util
+com.intellinum.mia.app.util.log
+com.intellinum.mia.app.util.patch
+com.intellinum.mia.app.util.tools
+com.intellinum.mia.app.util.tools.files
