@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initLogin();
   initResizer();
   wireUI();
+  initMic();
 });
 
 /* ═══════════════════════════════════════════════════════════
@@ -365,6 +366,63 @@ function wireUI() {
     const a    = document.createElement('a');
     a.href = url; a.download = 'flexipage.json'; a.click();
     URL.revokeObjectURL(url);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Voice / Mic
+═══════════════════════════════════════════════════════════ */
+function initMic() {
+  const btn = document.getElementById('btn-mic');
+  if (!btn) return;
+
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    btn.style.display = 'none';
+    return;
+  }
+
+  const recognition = new SpeechRecognition();
+  recognition.continuous  = false;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  let listening = false;
+  let baseText  = '';   // text in textarea before mic started
+
+  recognition.onstart = () => {
+    listening = true;
+    btn.classList.add('mic-active');
+    btn.title = 'Stop recording';
+    baseText = document.getElementById('prompt-input').value;
+  };
+
+  recognition.onresult = (e) => {
+    const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
+    const inp = document.getElementById('prompt-input');
+    inp.value = (baseText ? baseText + ' ' : '') + transcript;
+    autosize();
+  };
+
+  recognition.onend = () => {
+    listening = false;
+    btn.classList.remove('mic-active');
+    btn.title = 'Speak your prompt';
+    document.getElementById('prompt-input').focus();
+  };
+
+  recognition.onerror = () => {
+    listening = false;
+    btn.classList.remove('mic-active');
+    btn.title = 'Speak your prompt';
+  };
+
+  btn.addEventListener('click', () => {
+    if (listening) {
+      recognition.stop();
+    } else {
+      try { recognition.start(); } catch { /* already started */ }
+    }
   });
 }
 

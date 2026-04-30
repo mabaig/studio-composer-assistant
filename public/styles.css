@@ -26,8 +26,8 @@
   --navy-panel:  #eaf0fb;
   --navy-light:  #dce5f5;
   --navy-border: #c8d4ed;
-  --orange:      #E06810;
-  --orange-dim:  rgba(224,104,16,0.1);
+  --orange:      #222E5F;
+  --orange-dim:  rgba(34,46,95,0.10);
   --cyan:        #007bb5;
   --cyan-dim:    rgba(0,123,181,0.08);
   --text:        #1a2347;
@@ -484,6 +484,7 @@ html, body {
   cursor: pointer; transition: background 0.15s, opacity 0.15s;
 }
 .btn-send:hover { background: #d96a18; }
+[data-theme="light"] .btn-send:hover { background: #1a2450; }
 .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ─── Resize handle ───────────────────────────────────────── */
@@ -2256,3 +2257,32 @@ body.resizing .resize-handle { pointer-events: all; }
   transition: color 0.15s;
 }
 .footer-link:hover { color: var(--cyan); text-decoration: underline; }
+
+/* ═══════════════════════════════════════════════════════════
+   MIC BUTTON
+═══════════════════════════════════════════════════════════ */
+.btn-mic {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--navy-border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  padding: 0;
+}
+.btn-mic:hover { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+
+/* Pulsing red when recording */
+.btn-mic.mic-active {
+  border-color: #e53e3e;
+  color: #e53e3e;
+  background: rgba(229,62,62,0.12);
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229,62,62,0.4); }
+  50%       { box-shadow: 0 0 0 5px rgba(229,62,62,0); }
+}
