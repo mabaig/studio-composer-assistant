@@ -6,6 +6,20 @@ function switchTab(name) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   document.getElementById(`tab-${name}`)?.classList.add('active');
   document.getElementById(`pane-${name}`)?.classList.add('active');
+
+  // Show camera button only in preview tab
+  const dlPrev = document.getElementById('btn-download-preview');
+  if (dlPrev) dlPrev.style.display = name === 'preview' ? 'flex' : 'none';
+
+  // Lazy-load SCM tag chips on first open
+  if (name === 'scmrest') {
+    const chips = document.getElementById('scmrest-tag-chips');
+    if (chips && chips.dataset.loaded !== '1') loadScmTags();
+    setTimeout(() => document.getElementById('scmrest-q')?.focus(), 50);
+  }
+  if (name === 'javadoc') {
+    setTimeout(() => document.getElementById('javadoc-tab-q')?.focus(), 50);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -24,6 +38,7 @@ let historyOpen      = false;
 let currentMode      = 'new';  // 'new' | 'assistant' | 'edit'
 let _diffOriginalFp  = null;
 let _diffGeneratedFp = null;
+let _activeScmTag    = null;
 
 /* ═══════════════════════════════════════════════════════════
    Boot
@@ -322,29 +337,28 @@ function wireUI() {
     }
   });
 
-  // API search panel
-  document.getElementById('btn-api-search')?.addEventListener('click', toggleApiSearch);
-  document.getElementById('api-search-close')?.addEventListener('click', () => {
-    document.getElementById('api-search-panel').style.display = 'none';
-    document.getElementById('btn-api-search')?.classList.remove('active');
-  });
-  const apiQ = document.getElementById('api-search-q');
-  if (apiQ) {
-    apiQ.addEventListener('input', () => debounceApiSearch(apiQ.value));
-    apiQ.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('api-search-panel').style.display = 'none'; });
+  // SCM REST button → switch to right panel tab
+  document.getElementById('btn-api-search')?.addEventListener('click', () => switchTab('scmrest'));
+
+  // JavaDoc button → switch to right panel tab
+  document.getElementById('btn-javadoc-search')?.addEventListener('click', () => switchTab('javadoc'));
+
+  // SCM REST tab search input
+  const scmQ = document.getElementById('scmrest-q');
+  if (scmQ) {
+    scmQ.addEventListener('input', () => debounceApiSearch(scmQ.value));
+    scmQ.addEventListener('keydown', (e) => { if (e.key === 'Escape') { scmQ.value = ''; debounceApiSearch(''); } });
   }
 
-  // JavaDoc search panel
-  document.getElementById('btn-javadoc-search')?.addEventListener('click', toggleJavadocSearch);
-  document.getElementById('javadoc-search-close')?.addEventListener('click', () => {
-    document.getElementById('javadoc-search-panel').style.display = 'none';
-    document.getElementById('btn-javadoc-search')?.classList.remove('active');
-  });
-  const jdQ = document.getElementById('javadoc-search-q');
-  if (jdQ) {
-    jdQ.addEventListener('input', () => debounceJavadocSearch(jdQ.value));
-    jdQ.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('javadoc-search-panel').style.display = 'none'; });
+  // JavaDoc tab search input
+  const jdTabQ = document.getElementById('javadoc-tab-q');
+  if (jdTabQ) {
+    jdTabQ.addEventListener('input', () => debounceJavadocSearch(jdTabQ.value));
+    jdTabQ.addEventListener('keydown', (e) => { if (e.key === 'Escape') { jdTabQ.value = ''; debounceJavadocSearch(''); } });
   }
+
+  // Download preview image
+  document.getElementById('btn-download-preview')?.addEventListener('click', downloadPreviewImage);
 
   // Copy
   document.getElementById('btn-copy')?.addEventListener('click', copyContent);
@@ -813,6 +827,7 @@ function clearResponsePanel() {
       <p>Your generated FlexiPage will appear here.</p>
     </div>`;
   document.getElementById('btn-download').classList.remove('visible');
+  JSON_SCRIPT_STORE.length = 0;
   const copyBtn = document.getElementById('btn-copy');
   if (copyBtn) copyBtn.style.display = 'none';
   const ub = document.getElementById('usage-badge');
@@ -860,13 +875,23 @@ function clearAttachment() {
 }
 
 function syntaxHighlightJSON(obj) {
+  JSON_SCRIPT_STORE.length = 0;
   const json = JSON.stringify(obj, null, 2);
   const safe = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return safe.replace(
     /("(?:[^"\\]|\\.)*"\s*:)|("(?:[^"\\]|\\.)*")|(\b(?:true|false|null)\b)|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
     (match, key, str, bool, num) => {
       if (key)  return `<span class="json-key">${key}</span>`;
-      if (str)  return `<span class="json-string">${str}</span>`;
+      if (str) {
+        const inner = str.slice(1, -1)
+          .replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+          .replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+        if (inner.startsWith('script:') || inner.startsWith('groovy:')) {
+          const idx = JSON_SCRIPT_STORE.push(inner) - 1;
+          return `<span class="json-string json-script-val" onclick="showJsonScriptDialog(${idx})" title="Click to view formatted code">⚡ ${str}</span>`;
+        }
+        return `<span class="json-string">${str}</span>`;
+      }
       if (bool) return `<span class="json-boolean">${bool}</span>`;
       if (num)  return `<span class="json-number">${num}</span>`;
       return match;
@@ -875,33 +900,17 @@ function syntaxHighlightJSON(obj) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   API Search
+   API Search (SCM REST tab)
 ═══════════════════════════════════════════════════════════ */
 let _apiSearchTimer = null;
 
-function toggleApiSearch() {
-  const panel  = document.getElementById('api-search-panel');
-  const jdP    = document.getElementById('javadoc-search-panel');
-  const btn    = document.getElementById('btn-api-search');
-  const jdBtn  = document.getElementById('btn-javadoc-search');
-  const visible = panel.style.display !== 'none';
-
-  // Close JavaDoc panel if open
-  if (!visible) {
-    jdP.style.display = 'none';
-    jdBtn?.classList.remove('active');
-  }
-
-  panel.style.display = visible ? 'none' : 'block';
-  btn?.classList.toggle('active', !visible);
-  if (!visible) document.getElementById('api-search-q').focus();
-}
-
 function debounceApiSearch(q) {
   clearTimeout(_apiSearchTimer);
-  const resultsEl = document.getElementById('api-search-results');
+  const resultsEl = document.getElementById('scmrest-results');
   if (!q.trim()) {
-    resultsEl.innerHTML = '<p class="api-search-hint">Search across 3,613 Oracle SCM endpoints</p>';
+    _activeScmTag = null;
+    document.querySelectorAll('.tag-chip').forEach(c => c.classList.remove('active'));
+    resultsEl.innerHTML = '<p class="api-search-hint">Search by keyword or select a category above</p>';
     return;
   }
   resultsEl.innerHTML = '<p class="api-search-hint">Searching…</p>';
@@ -909,9 +918,10 @@ function debounceApiSearch(q) {
 }
 
 async function runApiSearch(q) {
-  const resultsEl = document.getElementById('api-search-results');
+  const resultsEl = document.getElementById('scmrest-results');
   try {
-    const res  = await fetch(`/api/search-api?q=${encodeURIComponent(q)}`);
+    const tagParam = _activeScmTag ? `&tag=${encodeURIComponent(_activeScmTag)}` : '';
+    const res  = await fetch(`/api/search-api?q=${encodeURIComponent(q)}${tagParam}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     renderApiSearchResults(data);
@@ -921,7 +931,7 @@ async function runApiSearch(q) {
 }
 
 function renderApiSearchResults(results) {
-  const el = document.getElementById('api-search-results');
+  const el = document.getElementById('scmrest-results');
   if (!results.length) {
     el.innerHTML = '<p class="api-search-hint">No results found</p>';
     return;
@@ -937,6 +947,46 @@ function renderApiSearchResults(results) {
       <div class="api-result-detail" id="api-detail-${i}" style="display:none"></div>
     </div>
   `).join('');
+}
+
+/* ── SCM tag browser ───────────────────────────────────────── */
+async function loadScmTags() {
+  const chips = document.getElementById('scmrest-tag-chips');
+  if (!chips) return;
+  chips.dataset.loaded = '1';
+  try {
+    const res  = await fetch('/api/scm-tags');
+    const tags = await res.json();
+    if (tags.error) throw new Error(tags.error);
+    chips.innerHTML = tags.map(t =>
+      `<button class="tag-chip" onclick="filterByTag('${escapeHtml(t.name).replace(/'/g, "\\'")}')" title="${escapeHtml(t.description || '')}">
+        ${escapeHtml(t.name)}<span class="tag-chip-count">${t.count}</span>
+      </button>`
+    ).join('');
+  } catch (err) {
+    chips.innerHTML = `<span class="api-search-hint" style="color:#ff6b6b">Failed to load categories: ${escapeHtml(err.message)}</span>`;
+  }
+}
+
+async function filterByTag(tag) {
+  _activeScmTag = tag;
+  const resultsEl = document.getElementById('scmrest-results');
+  const qInput    = document.getElementById('scmrest-q');
+  if (qInput) qInput.value = '';
+
+  document.querySelectorAll('.tag-chip').forEach(c => {
+    c.classList.toggle('active', c.textContent.trim().startsWith(tag));
+  });
+
+  resultsEl.innerHTML = '<p class="api-search-hint">Loading…</p>';
+  try {
+    const res  = await fetch(`/api/search-api?tag=${encodeURIComponent(tag)}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    renderApiSearchResults(data);
+  } catch (err) {
+    resultsEl.innerHTML = `<p class="api-search-hint" style="color:#ff6b6b">Error: ${escapeHtml(err.message)}</p>`;
+  }
 }
 
 async function toggleApiResultDetail(btn, idx, path) {
@@ -1028,6 +1078,39 @@ async function toggleApiResultDetail(btn, idx, path) {
 
       parts.push(`<button class="api-use-btn" onclick="injectApiContext(${idx},${rowIdx})">+ Add to prompt</button>`);
 
+      // ── Try It section ──
+      const qParams = (Array.isArray(r.parameters) ? r.parameters : []).filter(p => p.in === 'query' && p.name);
+      const hasBody = ['POST','PUT','PATCH'].includes(r.method);
+      const tryParts = [];
+      if (qParams.length) {
+        tryParts.push(`<div class="try-it-params"><p class="api-detail-label" style="margin-top:0">Query Parameters</p>`);
+        for (const p of qParams) {
+          tryParts.push(`<div class="try-it-param-row">
+            <span class="try-it-param-name">${escapeHtml(p.name)}</span>
+            <input class="try-it-input" data-try-param="${idx}-${rowIdx}" data-param-name="${escapeHtml(p.name)}"
+              placeholder="${p.required ? 'required' : 'optional'}" autocomplete="off">
+          </div>`);
+        }
+        tryParts.push(`</div>`);
+      }
+      if (hasBody) {
+        const bodySchema = pickSchema(r.request_body?.content);
+        const template = bodySchema?.properties
+          ? JSON.stringify(Object.fromEntries(Object.keys(bodySchema.properties).map(k => [k, ''])), null, 2)
+          : '{}';
+        tryParts.push(`<div class="try-it-body-section">
+          <p class="api-detail-label" style="margin-top:0">Request Body</p>
+          <textarea id="try-it-body-${idx}-${rowIdx}" class="try-it-body" rows="4" spellcheck="false">${escapeHtml(template)}</textarea>
+        </div>`);
+      }
+      tryParts.push(`<button class="try-it-execute-btn" onclick="executeScmApi(${idx},${rowIdx})">⚡ Execute</button>`);
+      tryParts.push(`<div id="try-it-resp-${idx}-${rowIdx}" class="try-it-response" style="display:none"></div>`);
+
+      parts.push(`<div class="try-it-section">
+        <button class="try-it-toggle" onclick="toggleTryIt(this)">▶ Try It</button>
+        <div class="try-it-content" style="display:none">${tryParts.join('')}</div>
+      </div>`);
+
       return `<div class="api-detail-block">${parts.join('')}</div>`;
     }).join('<div class="api-detail-sep"></div>');
 
@@ -1075,29 +1158,74 @@ async function expandSchemaRef(btn, schemaName) {
   }
 }
 
-function renderSchemaFields(schema) {
+function renderSchemaFields(schema, depth) {
+  depth = depth || 0;
+
+  // Merge allOf sub-schemas
+  if (!schema.properties && schema.allOf) {
+    const merged = { properties: {}, required: [] };
+    for (const sub of schema.allOf) {
+      Object.assign(merged.properties, sub.properties || {});
+      merged.required.push(...(sub.required || []));
+    }
+    if (Object.keys(merged.properties).length) return renderSchemaFields(merged, depth);
+  }
+  if (!schema.properties && (schema.anyOf || schema.oneOf)) {
+    const variants = schema.anyOf || schema.oneOf;
+    return variants.map(v => renderSchemaFields(v, depth)).join('');
+  }
+
   const props    = schema.properties || {};
   const required = schema.required   || [];
   const entries  = Object.entries(props);
-  if (!entries.length) return '<p class="api-param-desc" style="margin:4px 0 8px">No properties.</p>';
+  if (!entries.length) return '<p class="api-param-desc" style="margin:4px 0 8px">No properties defined.</p>';
+
+  const depthStyle = depth > 0
+    ? ` style="margin-left:${depth * 10}px; border-left:2px solid var(--navy-border); padding-left:8px;"` : '';
 
   const rows = entries.map(([name, prop]) => {
     const isReq = required.includes(name);
-    const type  = prop.type
-      || (prop.$ref     ? prop.$ref.replace(/.*\//, '')    : '')
-      || (prop.allOf    ? 'object'                         : '')
-      || (prop.items    ? `array[${prop.items?.type || ''}]` : '')
-      || 'any';
-    const example = prop.example !== undefined ? String(prop.example) : null;
-    const desc    = prop.description ? prop.description.split(/\.\s/)[0] + '.' : '';
-    return `<div class="api-schema-field">
+    let type = 'any';
+    if (prop.type) {
+      type = prop.type;
+      if (prop.type === 'array' && prop.items?.type) type = `array[${prop.items.type}]`;
+      if (prop.type === 'array' && prop.items?.$ref)  type = `array[${prop.items.$ref.replace(/.*\//, '')}]`;
+    } else if (prop.$ref)  { type = prop.$ref.replace(/.*\//, ''); }
+    else if (prop.allOf)   { type = 'object'; }
+
+    const example  = prop.example !== undefined ? String(prop.example) : null;
+    const desc     = prop.description ? prop.description.split(/\.\s/)[0] + '.' : '';
+    const extras   = [
+      prop.maxLength ? `max ${prop.maxLength}` : '',
+      prop.minLength ? `min ${prop.minLength}` : '',
+      prop.format    ? prop.format              : '',
+      prop.enum      ? `[${prop.enum.slice(0,5).join(', ')}${prop.enum.length > 5 ? '…' : ''}]` : '',
+    ].filter(Boolean).map(x => `<span class="api-param-type">${escapeHtml(x)}</span>`).join('');
+
+    // Recursive nested rendering
+    let nestedHtml = '';
+    if (depth < 3) {
+      if ((prop.type === 'object' || (!prop.type && prop.properties)) && prop.properties) {
+        nestedHtml = `<div class="api-schema-nested">${renderSchemaFields(prop, depth + 1)}</div>`;
+      } else if (prop.type === 'array' && prop.items?.properties) {
+        nestedHtml = `<div class="api-schema-nested"><div class="api-schema-array-label">items:</div>${renderSchemaFields(prop.items, depth + 1)}</div>`;
+      } else if (prop.allOf) {
+        const merged2 = { properties: {}, required: [] };
+        for (const sub of prop.allOf) { Object.assign(merged2.properties, sub.properties || {}); merged2.required.push(...(sub.required || [])); }
+        if (Object.keys(merged2.properties).length) nestedHtml = `<div class="api-schema-nested">${renderSchemaFields(merged2, depth + 1)}</div>`;
+      }
+    }
+
+    return `<div class="api-schema-field"${depthStyle}>
       <div class="api-param-meta">
         <code class="api-param-name">${escapeHtml(name)}</code>
         <span class="api-param-type">${escapeHtml(type)}</span>
         ${isReq ? '<span class="api-param-required">required</span>' : ''}
+        ${extras}
       </div>
       ${desc    ? `<p class="api-param-desc">${escapeHtml(desc)}</p>` : ''}
       ${example ? `<p class="api-param-desc api-param-example">e.g. <code>${escapeHtml(example)}</code></p>` : ''}
+      ${nestedHtml}
     </div>`;
   });
   return `<div class="api-schema-fields">${rows.join('')}</div>`;
@@ -1144,9 +1272,52 @@ function injectApiContext(idx, rowIdx) {
   ta.focus();
   ta.setSelectionRange(block.length, block.length);
   autosize();
-  document.getElementById('api-search-panel').style.display = 'none';
   ta.closest('.input-row')?.classList.add('api-injected');
   setTimeout(() => ta.closest('.input-row')?.classList.remove('api-injected'), 800);
+}
+
+function toggleTryIt(btn) {
+  const content = btn.nextElementSibling;
+  const open    = content.style.display !== 'none';
+  content.style.display = open ? 'none' : 'flex';
+  btn.textContent        = open ? '▶ Try It' : '▼ Try It';
+}
+
+async function executeScmApi(idx, rowIdx) {
+  const detailEl = document.getElementById(`api-detail-${idx}`);
+  const r        = detailEl?._apiRows?.[rowIdx];
+  const respEl   = document.getElementById(`try-it-resp-${idx}-${rowIdx}`);
+  if (!r || !respEl) return;
+
+  const queryParams = {};
+  document.querySelectorAll(`[data-try-param="${idx}-${rowIdx}"]`).forEach(inp => {
+    if (inp.value.trim()) queryParams[inp.dataset.paramName] = inp.value.trim();
+  });
+
+  const bodyEl = document.getElementById(`try-it-body-${idx}-${rowIdx}`);
+  const body   = bodyEl ? bodyEl.value.trim() || null : null;
+
+  respEl.style.display = 'block';
+  respEl.innerHTML     = '<p class="api-search-hint" style="padding:10px">Executing…</p>';
+
+  try {
+    const res  = await fetch('/api/scm-execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ method: r.method, path: r.path, queryParams, body }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    const isOk   = data.status >= 200 && data.status < 300;
+    const pretty = typeof data.data === 'object' && data.data !== null
+      ? JSON.stringify(data.data, null, 2)
+      : String(data.data ?? '(empty)');
+    respEl.innerHTML = `
+      <div class="try-it-status ${isOk ? 'try-it-ok' : 'try-it-err'}">HTTP ${data.status} ${escapeHtml(data.statusText || '')}</div>
+      <pre class="try-it-response-body">${escapeHtml(pretty)}</pre>`;
+  } catch (err) {
+    respEl.innerHTML = `<p class="api-search-hint" style="color:#ff6b6b;padding:10px">Error: ${escapeHtml(err.message)}</p>`;
+  }
 }
 
 async function copyContent() {
@@ -1371,9 +1542,11 @@ function keepOriginal() {
 /* ═══════════════════════════════════════════════════════════
    Script dialog
 ═══════════════════════════════════════════════════════════ */
-const SCRIPT_STORE = [];
+const SCRIPT_STORE      = [];  // preview node scripts
+const JSON_SCRIPT_STORE = [];  // JSON output hover scripts
 
-function showScriptDialogByIdx(idx) { showScriptDialog(SCRIPT_STORE[idx] || ''); }
+function showScriptDialogByIdx(idx)  { showScriptDialog(SCRIPT_STORE[idx]      || ''); }
+function showJsonScriptDialog(idx)   { showScriptDialog(JSON_SCRIPT_STORE[idx] || ''); }
 
 function showScriptDialog(raw) {
   const overlay = document.getElementById('script-dialog-overlay');
@@ -1631,31 +1804,13 @@ function renderPreview(fp) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   JavaDoc Search
+   JavaDoc Search (JavaDoc tab)
 ═══════════════════════════════════════════════════════════ */
 let _javadocSearchTimer = null;
 
-function toggleJavadocSearch() {
-  const panel  = document.getElementById('javadoc-search-panel');
-  const apiP   = document.getElementById('api-search-panel');
-  const btn    = document.getElementById('btn-javadoc-search');
-  const apiBtn = document.getElementById('btn-api-search');
-  const visible = panel.style.display !== 'none';
-
-  // Close SCM panel if open
-  if (!visible) {
-    apiP.style.display = 'none';
-    apiBtn?.classList.remove('active');
-  }
-
-  panel.style.display = visible ? 'none' : 'block';
-  btn?.classList.toggle('active', !visible);
-  if (!visible) document.getElementById('javadoc-search-q').focus();
-}
-
 function debounceJavadocSearch(q) {
   clearTimeout(_javadocSearchTimer);
-  const el = document.getElementById('javadoc-search-results');
+  const el = document.getElementById('javadoc-tab-results');
   if (!q.trim()) {
     el.innerHTML = '<p class="api-search-hint">Search FlexiPro Java API — classes, methods, fields</p>';
     return;
@@ -1665,7 +1820,7 @@ function debounceJavadocSearch(q) {
 }
 
 async function runJavadocSearch(q) {
-  const el = document.getElementById('javadoc-search-results');
+  const el = document.getElementById('javadoc-tab-results');
   try {
     const res  = await fetch(`/api/search-javadoc?q=${encodeURIComponent(q)}`);
     const data = await res.json();
@@ -1677,7 +1832,7 @@ async function runJavadocSearch(q) {
 }
 
 function renderJavadocResults(results) {
-  const el = document.getElementById('javadoc-search-results');
+  const el = document.getElementById('javadoc-tab-results');
   if (!results.length) {
     el.innerHTML = '<p class="api-search-hint">No results found</p>';
     return;
@@ -1806,6 +1961,37 @@ function injectJavadocContext(idx) {
   ta.focus();
   ta.setSelectionRange(block.length, block.length);
   autosize();
-  document.getElementById('javadoc-search-panel').style.display = 'none';
-  document.getElementById('btn-javadoc-search')?.classList.remove('active');
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Download preview as image
+═══════════════════════════════════════════════════════════ */
+async function downloadPreviewImage() {
+  const shell = document.querySelector('.mobile-phone-shell');
+  if (!shell) return;
+  const btn = document.getElementById('btn-download-preview');
+  if (btn) btn.disabled = true;
+  try {
+    if (typeof html2canvas === 'undefined') {
+      alert('html2canvas library not loaded — cannot capture preview.');
+      return;
+    }
+    const canvas = await html2canvas(shell, {
+      backgroundColor: '#1a1a1a',
+      scale: 2,
+      logging: false,
+      useCORS: true,
+    });
+    const url = canvas.toDataURL('image/png');
+    const a   = document.createElement('a');
+    a.href = url;
+    a.download = 'flexipage-preview.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  } catch (err) {
+    console.error('Preview download failed:', err);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }

@@ -14,6 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" id="hljs-theme" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </head>
 <body>
 
@@ -117,31 +118,6 @@
           </div>
         </div>
 
-        <!-- API Search panel -->
-        <div class="api-search-panel" id="api-search-panel" style="display:none">
-          <div class="api-search-bar">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input type="text" id="api-search-q" placeholder="Search SCM APIs… e.g. receiving transaction" autocomplete="off" spellcheck="false">
-            <button id="api-search-close" class="btn-remove-file" title="Close">×</button>
-          </div>
-          <div class="api-search-results" id="api-search-results">
-            <p class="api-search-hint">Search across 3,613 Oracle SCM endpoints</p>
-          </div>
-        </div>
-
-        <!-- JavaDoc Search panel -->
-        <div class="api-search-panel" id="javadoc-search-panel" style="display:none">
-          <div class="api-search-bar">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input type="text" id="javadoc-search-q" placeholder="Search FlexiPro Java classes &amp; methods…" autocomplete="off" spellcheck="false">
-            <a href="/flexipro-javadoc/index.html" target="_blank" class="javadoc-browse-link" title="Browse JavaDoc in new tab">Browse ↗</a>
-            <button id="javadoc-search-close" class="btn-remove-file" title="Close">×</button>
-          </div>
-          <div class="api-search-results" id="javadoc-search-results">
-            <p class="api-search-hint">Search FlexiPro Java API — classes, methods, fields</p>
-          </div>
-        </div>
-
         <div class="attachment-row" id="attachment-row">
           <span class="attachment-chip">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -151,11 +127,11 @@
         </div>
 
         <div class="input-row">
-          <button id="btn-api-search" class="btn-attach btn-api-search-toggle" title="Search Oracle SCM REST APIs">
+          <button id="btn-api-search" class="btn-attach btn-api-search-toggle" title="Browse Oracle SCM REST APIs">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <span class="btn-api-label">SCM REST</span>
           </button>
-          <button id="btn-javadoc-search" class="btn-attach btn-javadoc-search-toggle" title="Search FlexiPro JavaDoc">
+          <button id="btn-javadoc-search" class="btn-attach btn-javadoc-search-toggle" title="Browse FlexiPro JavaDoc">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="8" y="13" width="8" height="8" rx="1"/>
               <path d="M7 13h10l1.5-8h-13L7 13z"/>
@@ -196,12 +172,23 @@
               Preview
               <span class="preview-badge" id="preview-badge" style="display:none"></span>
             </button>
+            <button class="tab" id="tab-scmrest" onclick="switchTab('scmrest')">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              SCM REST
+            </button>
+            <button class="tab" id="tab-javadoc" onclick="switchTab('javadoc')">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="13" width="8" height="8" rx="1"/><path d="M7 13h10l1.5-8h-13L7 13z"/></svg>
+              JavaDoc
+            </button>
           </div>
           <span class="validation-badge" id="validation-badge"></span>
         </div>
         <div class="toolbar-right">
           <span class="status-indicator" id="status-indicator"></span>
           <span class="usage-badge" id="usage-badge"></span>
+          <button id="btn-download-preview" class="btn-icon" title="Save preview as image" style="display:none">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 0 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+          </button>
           <button id="btn-copy" class="btn-icon" title="Copy to clipboard" style="display:none">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           </button>
@@ -244,6 +231,41 @@
           </div>
         </div>
       </div>
+
+      <!-- SCM REST tab -->
+      <div class="tab-pane" id="pane-scmrest">
+        <div class="tab-full-search">
+          <div class="tab-search-header">
+            <div class="tab-search-bar">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="scmrest-q" placeholder="Search 3,613 Oracle SCM endpoints…" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="tab-tag-chips" id="scmrest-tag-chips">
+              <span class="api-search-hint" style="padding:6px 0">Loading categories…</span>
+            </div>
+          </div>
+          <div class="tab-search-results" id="scmrest-results">
+            <p class="api-search-hint">Search by keyword or select a category above to browse Oracle SCM APIs</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- JavaDoc tab -->
+      <div class="tab-pane" id="pane-javadoc">
+        <div class="tab-full-search">
+          <div class="tab-search-header">
+            <div class="tab-search-bar">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="text" id="javadoc-tab-q" placeholder="Search FlexiPro Java classes &amp; methods…" autocomplete="off" spellcheck="false">
+              <a href="/flexipro-javadoc/index.html" target="_blank" class="javadoc-browse-link" title="Browse full JavaDoc">Browse ↗</a>
+            </div>
+          </div>
+          <div class="tab-search-results" id="javadoc-tab-results">
+            <p class="api-search-hint">Search FlexiPro Java API — classes, methods, fields</p>
+          </div>
+        </div>
+      </div>
+
     </main>
 
   </div>

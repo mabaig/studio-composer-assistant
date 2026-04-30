@@ -1986,3 +1986,246 @@ body.resizing .resize-handle { pointer-events: all; }
   .mobile-phone-shell  { border-width: 5px; border-radius: 18px; }
   .mobile-scroll-content { max-height: 320px; }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   FULL-TAB SEARCH PANES  (SCM REST + JavaDoc right tabs)
+═══════════════════════════════════════════════════════════ */
+.tab-full-search {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.tab-search-header {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--navy-border);
+  background: var(--navy);
+}
+
+.tab-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  color: var(--text-dim);
+}
+
+.tab-search-bar input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.tab-search-bar input::placeholder { color: var(--text-dim); }
+
+/* Tag chip row */
+.tab-tag-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 14px 10px;
+  max-height: 115px;
+  overflow-y: auto;
+}
+.tab-tag-chips::-webkit-scrollbar { height: 3px; }
+.tab-tag-chips::-webkit-scrollbar-thumb { background: var(--navy-light); border-radius: 3px; }
+
+.tag-chip {
+  background: var(--navy-light);
+  border: 1px solid var(--navy-border);
+  border-radius: 11px;
+  padding: 2px 9px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.tag-chip:hover { background: var(--navy-border); color: var(--text); }
+.tag-chip.active {
+  background: var(--orange-dim);
+  border-color: var(--orange);
+  color: var(--orange);
+}
+.tag-chip-count {
+  font-size: 9px;
+  color: var(--text-dim);
+  background: var(--navy-mid);
+  border-radius: 8px;
+  padding: 0 4px;
+}
+
+/* Scrollable results area */
+.tab-search-results {
+  flex: 1;
+  overflow-y: auto;
+  background: var(--navy-mid);
+}
+.tab-search-results::-webkit-scrollbar { width: 5px; }
+.tab-search-results::-webkit-scrollbar-thumb { background: var(--navy-light); border-radius: 4px; }
+
+/* Override result detail max-height in full tab context */
+.tab-search-results .api-result-detail { max-height: none; }
+
+/* ═══════════════════════════════════════════════════════════
+   TRY IT  (SCM REST execute form)
+═══════════════════════════════════════════════════════════ */
+.try-it-section {
+  margin-top: 8px;
+  border-top: 1px solid var(--navy-border);
+  padding-top: 8px;
+}
+
+.try-it-toggle {
+  background: none;
+  border: 1px solid var(--navy-border);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  color: var(--cyan);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.try-it-toggle:hover { background: var(--cyan-dim); }
+
+.try-it-content {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.try-it-params { display: flex; flex-direction: column; gap: 5px; }
+
+.try-it-param-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.try-it-param-name {
+  font-family: 'SF Mono','Fira Code',monospace;
+  font-size: 11px;
+  color: var(--text-muted);
+  min-width: 120px;
+  flex-shrink: 0;
+}
+
+.try-it-input {
+  flex: 1;
+  background: var(--navy);
+  border: 1px solid var(--navy-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: 'SF Mono','Fira Code',monospace;
+  outline: none;
+}
+.try-it-input:focus { border-color: var(--cyan); }
+
+.try-it-body-section { display: flex; flex-direction: column; gap: 4px; }
+
+.try-it-body {
+  width: 100%;
+  background: var(--navy);
+  border: 1px solid var(--navy-border);
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 12px;
+  color: var(--text);
+  font-family: 'SF Mono','Fira Code',monospace;
+  resize: vertical;
+  outline: none;
+  min-height: 80px;
+}
+.try-it-body:focus { border-color: var(--cyan); }
+
+.try-it-execute-btn {
+  align-self: flex-start;
+  background: var(--cyan-dim);
+  border: 1px solid var(--cyan);
+  border-radius: 5px;
+  padding: 5px 12px;
+  font-size: 12px;
+  color: var(--cyan);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.try-it-execute-btn:hover { background: rgba(0,159,222,0.22); }
+
+.try-it-response {
+  background: var(--navy);
+  border: 1px solid var(--navy-border);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.try-it-status {
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--navy-border);
+}
+.try-it-ok  { background: rgba(52,199,89,0.1);  color: #34c759; }
+.try-it-err { background: rgba(255,59,48,0.1);  color: #ff3b30; }
+
+.try-it-response-body {
+  padding: 10px;
+  font-family: 'SF Mono','Fira Code',monospace;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+}
+.try-it-response-body::-webkit-scrollbar { width: 4px; }
+.try-it-response-body::-webkit-scrollbar-thumb { background: var(--navy-light); border-radius: 4px; }
+
+/* ═══════════════════════════════════════════════════════════
+   JSON OUTPUT — clickable script values
+═══════════════════════════════════════════════════════════ */
+.json-script-val {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 3px;
+  transition: background 0.12s, color 0.12s;
+}
+.json-script-val:hover {
+  background: rgba(244,121,32,0.18);
+  color: var(--orange);
+  text-decoration: underline dotted;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NESTED SCHEMA FIELDS
+═══════════════════════════════════════════════════════════ */
+.api-schema-nested {
+  margin-top: 4px;
+  margin-left: 10px;
+  border-left: 2px solid var(--navy-border);
+  padding-left: 8px;
+}
+.api-schema-array-label {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+/* ── Download preview camera button ───────────────────────── */
+#btn-download-preview {
+  color: var(--text-muted);
+}
+#btn-download-preview:hover { color: var(--cyan); }
+#btn-download-preview:disabled { opacity: 0.5; cursor: not-allowed; }

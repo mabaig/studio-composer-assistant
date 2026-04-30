@@ -60,29 +60,107 @@ app.get('/api/search-api', async (req, res) => {
   const pool = getDbPool();
   if (!pool) return res.status(503).json({ error: 'Database not configured' });
 
-  const q = (req.query.q || '').trim();
-  if (!q) return res.json([]);
+  const q   = (req.query.q || '').trim();
+  const tag = (req.query.tag || '').trim();
+
+  if (!q && !tag) return res.json([]);
 
   try {
+    if (tag && !q) {
+      const { rows } = await pool.query(`
+        SELECT method, path, operation_id, summary, tags, 0.0::numeric AS rank
+        FROM scm_endpoints
+        WHERE $1 = ANY(tags)
+        ORDER BY path, method
+        LIMIT 100
+      `, [tag]);
+      return res.json(rows);
+    }
+
     const words    = q.split(/\s+/).filter(Boolean);
     const wParams  = words.map((w) => `%${w}%`);
     const wClause  = words.map((_, i) => `path ILIKE $${i + 1}`).join(' AND ');
     const base     = words.length;
+    const tagFilter = tag ? `AND $${base + 3} = ANY(tags)` : '';
+    const qParams   = [...wParams, q, `%${q}%`];
+    if (tag) qParams.push(tag);
 
     const { rows } = await pool.query(`
       SELECT method, path, operation_id, summary, tags,
         round(ts_rank(search_vec, plainto_tsquery('english', $${base+1}))::numeric, 4) AS rank
       FROM scm_endpoints
-      WHERE search_vec @@ plainto_tsquery('english', $${base+1})
+      WHERE (search_vec @@ plainto_tsquery('english', $${base+1})
         OR (${wClause || 'false'})
         OR summary      ILIKE $${base+2}
-        OR operation_id ILIKE $${base+2}
+        OR operation_id ILIKE $${base+2})
+        ${tagFilter}
       ORDER BY rank DESC, path, method
-      LIMIT 20
-    `, [...wParams, q, `%${q}%`]);
+      LIMIT 50
+    `, qParams);
     res.json(rows);
   } catch (err) {
     console.error('[/api/search-api]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ── SCM tags list ─────────────────────────────────────────── */
+app.get('/api/scm-tags', async (req, res) => {
+  const pool = getDbPool();
+  if (!pool) return res.status(503).json({ error: 'Database not configured' });
+  try {
+    const { rows } = await pool.query(`
+      SELECT t.name, t.description,
+        (SELECT count(*) FROM scm_endpoints WHERE t.name = ANY(tags))::int AS count
+      FROM scm_tags t
+      ORDER BY count DESC, t.name
+      LIMIT 60
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('[/api/scm-tags]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ── SCM API proxy (Try It) ────────────────────────────────── */
+app.post('/api/scm-execute', async (req, res) => {
+  const baseUrl  = (process.env.SCM_BASE_URL || '').replace(/\/$/, '');
+  const username = process.env.SCM_USERNAME || '';
+  const password = process.env.SCM_PASSWORD || '';
+
+  if (!baseUrl) return res.status(503).json({ error: 'SCM_BASE_URL not configured in .env' });
+
+  const { method, path: apiPath, queryParams, body } = req.body;
+  if (!method || !apiPath) return res.status(400).json({ error: 'method and path required' });
+
+  try {
+    const url = new URL(baseUrl + apiPath);
+    if (queryParams && typeof queryParams === 'object') {
+      for (const [k, v] of Object.entries(queryParams)) {
+        if (v !== '' && v != null) url.searchParams.set(k, v);
+      }
+    }
+
+    const headers = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+    if (username || password) {
+      headers['Authorization'] = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
+    }
+
+    const upRes = await fetch(url.toString(), {
+      method: method.toUpperCase(),
+      headers,
+      body: ['POST','PUT','PATCH'].includes(method.toUpperCase()) && body ? body : undefined,
+    });
+
+    const ct = upRes.headers.get('content-type') || '';
+    const data = ct.includes('json')
+      ? await upRes.json().catch(() => null)
+      : await upRes.text().catch(() => null);
+
+    res.json({ status: upRes.status, statusText: upRes.statusText, data });
+  } catch (err) {
+    console.error('[/api/scm-execute]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
