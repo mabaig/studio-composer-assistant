@@ -337,12 +337,6 @@ function wireUI() {
     }
   });
 
-  // SCM REST button → switch to right panel tab
-  document.getElementById('btn-api-search')?.addEventListener('click', () => switchTab('scmrest'));
-
-  // JavaDoc button → switch to right panel tab
-  document.getElementById('btn-javadoc-search')?.addEventListener('click', () => switchTab('javadoc'));
-
   // SCM REST tab search input
   const scmQ = document.getElementById('scmrest-q');
   if (scmQ) {
@@ -1061,17 +1055,13 @@ async function toggleApiResultDetail(btn, idx, path) {
         parts.push(`<p class="api-detail-label">Responses</p>`);
         parts.push('<div class="api-responses">');
         for (const [code, resp] of respEntries) {
-          const schema   = pickSchema(resp?.content);
-          const ref      = schema?.$ref?.replace(/.*\//, '');
-          const firstKey = code[0]; // '2', '4', '5'
+          const firstKey = code[0];
           parts.push(`<div class="api-response-item">
             <span class="api-response-code api-rc-${firstKey}">${code}</span>
             <span class="api-response-desc">${escapeHtml(resp.description || '')}</span>
-            ${ref ? `<code class="api-schema-ref-inline">→ ${escapeHtml(ref)}</code>` : ''}
           </div>`);
-          if (schema?.properties) {
-            parts.push(renderSchemaFields(schema));
-          }
+          // Render schema inline or with Expand button for $ref
+          parts.push(renderSchemaBlock(resp));
         }
         parts.push('</div>');
       }
@@ -1549,14 +1539,18 @@ function showScriptDialogByIdx(idx)  { showScriptDialog(SCRIPT_STORE[idx]      |
 function showJsonScriptDialog(idx)   { showScriptDialog(JSON_SCRIPT_STORE[idx] || ''); }
 
 function showScriptDialog(raw) {
-  const overlay = document.getElementById('script-dialog-overlay');
-  const code    = document.getElementById('script-dialog-code');
-  const title   = document.getElementById('script-dialog-title');
+  const overlay  = document.getElementById('script-dialog-overlay');
+  const code     = document.getElementById('script-dialog-code');
+  const title    = document.getElementById('script-dialog-title');
   const isGroovy = raw.startsWith('groovy:');
-  const src = raw.replace(/^(script:|groovy:)\s*/i, '').trim();
-  code.textContent = src;
-  code.className = isGroovy ? 'language-groovy' : 'language-java';
+  const src      = raw.replace(/^(script:|groovy:)\s*/i, '').trim();
+
+  // Reset element so hljs re-highlights (it skips already-highlighted elements)
+  code.removeAttribute('data-highlighted');
+  code.textContent  = src;
+  code.className    = isGroovy ? 'language-groovy' : 'language-java';
   title.textContent = isGroovy ? 'Groovy Script' : 'Java Script';
+
   if (typeof hljs !== 'undefined') hljs.highlightElement(code);
   overlay.style.display = 'flex';
 }

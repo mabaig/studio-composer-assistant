@@ -1,7 +1,7 @@
 /**
  * OpenAPI → PostgreSQL ingestor
  * Usage: node ingest.js <path-to-openapi.json>
- *
+ * Author: Mohammed Baig 
  * Drops and recreates scm_endpoints, scm_tags, scm_schemas every run.
  * Safe to re-run with a new OpenAPI file — always loads from scratch.
 node --max-old-space-size=2048 openapi-ingestor/ingest.js openapi-ingestor/oracle-fusion-scm-rest-openapi.json

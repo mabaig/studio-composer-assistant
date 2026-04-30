@@ -2229,3 +2229,30 @@ body.resizing .resize-handle { pointer-events: all; }
 }
 #btn-download-preview:hover { color: var(--cyan); }
 #btn-download-preview:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ═══════════════════════════════════════════════════════════
+   APP FOOTER  (subtle credit line at bottom of chat panel)
+═══════════════════════════════════════════════════════════ */
+.app-footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 8px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--navy-border);
+  opacity: 0.45;
+  transition: opacity 0.25s;
+  user-select: none;
+}
+.app-footer:hover { opacity: 1; }
+
+.footer-sep { color: var(--navy-border); }
+
+.footer-link {
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+.footer-link:hover { color: var(--cyan); text-decoration: underline; }

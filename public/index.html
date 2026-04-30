@@ -14,6 +14,7 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" id="hljs-theme" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/groovy.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 </head>
 <body>
@@ -127,20 +128,6 @@
         </div>
 
         <div class="input-row">
-          <button id="btn-api-search" class="btn-attach btn-api-search-toggle" title="Browse Oracle SCM REST APIs">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <span class="btn-api-label">SCM REST</span>
-          </button>
-          <button id="btn-javadoc-search" class="btn-attach btn-javadoc-search-toggle" title="Browse FlexiPro JavaDoc">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="8" y="13" width="8" height="8" rx="1"/>
-              <path d="M7 13h10l1.5-8h-13L7 13z"/>
-              <line x1="12" y1="1" x2="12" y2="3"/>
-              <line x1="5.5" y1="2.5" x2="7" y2="4.5"/>
-              <line x1="18.5" y1="2.5" x2="17" y2="4.5"/>
-            </svg>
-            <span class="btn-api-label">JavaDoc</span>
-          </button>
           <label class="btn-attach" title="Attach a JSON file (sent as code context)">
             <input type="file" id="file-input" accept=".json">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -151,6 +138,12 @@
           </button>
         </div>
       </div>
+
+      <footer class="app-footer">
+        <span>© 2026 Intellinum Inc</span>
+        <span class="footer-sep">·</span>
+        <a href="mailto:baig.mohammed@intellinum.com" class="footer-link" title="mailto:baig.mohammed@intellinum.com">Contact for issues</a>
+      </footer>
     </aside>
 
     <!-- Drag resize handle -->

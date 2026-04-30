@@ -153,10 +153,14 @@ app.post('/api/scm-execute', async (req, res) => {
       body: ['POST','PUT','PATCH'].includes(method.toUpperCase()) && body ? body : undefined,
     });
 
-    const ct = upRes.headers.get('content-type') || '';
-    const data = ct.includes('json')
-      ? await upRes.json().catch(() => null)
-      : await upRes.text().catch(() => null);
+    const ct  = upRes.headers.get('content-type') || '';
+    const raw = await upRes.text().catch(() => '');
+    let data;
+    if (ct.includes('json') && raw) {
+      try { data = JSON.parse(raw); } catch { data = raw; }
+    } else {
+      data = raw || null;
+    }
 
     res.json({ status: upRes.status, statusText: upRes.statusText, data });
   } catch (err) {
